@@ -5,8 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,7 +22,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewModelScope
 import coil.compose.rememberAsyncImagePainter
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -32,7 +29,6 @@ import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.shouldShowRationale
 import com.photoai.app.ui.viewmodel.MainViewModel
 import com.photoai.app.utils.createImageFile
-import com.photoai.app.utils.uriToBitmap
 import com.photoai.app.utils.urlToBitmap
 import com.photoai.app.utils.PromptsLoader
 import kotlinx.coroutines.launch
@@ -386,10 +382,6 @@ fun MainScreen(
                         onClick = {
                             if (customPrompt.isNotBlank()) {
                                 selectedImageUri?.let { uri ->
-//                                    val bitmap = uriToBitmap(context, uri)
-//                                    if (bitmap != null) {
-//                                        viewModel.editImage(bitmap, customPrompt)
-//                                    }
                                      viewModel.editImage(context, uri, customPrompt)
                                 }
                             }

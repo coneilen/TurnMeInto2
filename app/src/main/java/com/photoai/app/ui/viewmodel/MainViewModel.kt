@@ -11,14 +11,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.photoai.app.api.OpenAIService
-import com.photoai.app.utils.resizeBitmapToHalf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-//import java.net.URI
 
 class MainViewModel : ViewModel() {
     private val openAIService = OpenAIService.getInstance()
@@ -63,16 +61,12 @@ class MainViewModel : ViewModel() {
         }
     }
     
-//    fun editImage(bitmap: Bitmap, prompt: String) {
     fun editImage(context: Context, uri: Uri, prompt: String) {
         viewModelScope.launch {
             isProcessing.value = true
             errorMessage.value = null
             
             try {
-                // Resize image to half its dimensions before sending to OpenAI
-//                val resizedBitmap = resizeBitmapToHalf(bitmap)
-                
                 val result = openAIService.editImage(context, uri, prompt)
                 
                 result.fold(

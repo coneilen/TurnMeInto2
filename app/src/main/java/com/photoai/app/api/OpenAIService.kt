@@ -162,12 +162,10 @@ class OpenAIService {
                 val modelBody = "gpt-image-1".toRequestBody("text/plain".toMediaType())
                 val nBody = "1".toRequestBody("text/plain".toMediaType())
                 val sizeBody = "1024x1024".toRequestBody("text/plain".toMediaType())
-                val responseFormatBody = "b64_json".toRequestBody("text/plain".toMediaType())
                 
                 android.util.Log.d("OpenAIService", "Making API call with prompt: $prompt")
                 android.util.Log.d("OpenAIService", "Model: gpt-image-1")
                 android.util.Log.d("OpenAIService", "Size: 1024x1024")
-                android.util.Log.d("OpenAIService", "Response format: b64_json")
                 
                 // Make API call
                 val response = api.createImageEdit(
@@ -178,7 +176,6 @@ class OpenAIService {
                     model = modelBody,
                     n = nBody,
                     size = sizeBody,
-//                    responseFormat = responseFormatBody,
                     user = null
                 )
                 
