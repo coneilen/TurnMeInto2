@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
@@ -166,40 +168,72 @@ fun MainScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFFE8E4F3),
+                        Color(0xFFD1C4E9),
+                        Color(0xFFF8E1FF)
+                    )
+                )
+            )
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Title with edit prompts button
-        Row(
+        Card(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFFFFFFFF).copy(alpha = 0.9f)
+            ),
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
-            Text(
-                text = "Photo AI Assistant",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            TextButton(
-                onClick = { showPromptsEditor = true }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Edit Prompts")
+                Text(
+                    text = "🎨 Photo AI Assistant",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF8E7CC3),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { showPromptsEditor = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFFB3BA)
+                    ),
+                    shape = RoundedCornerShape(25.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("✨ Edit Prompts", color = Color.White, fontWeight = FontWeight.Bold)
+                }
             }
         }
         
         // Image selection buttons
         Card(
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFFFFFFFF).copy(alpha = 0.95f)
+            ),
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "Select or Capture Image",
+                    text = "📸 Select or Capture Image",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF7FC7D9)
                 )
                 
                 Row(
@@ -207,7 +241,7 @@ fun MainScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // Camera button
-                    OutlinedButton(
+                    Button(
                         onClick = {
                             if (cameraPermissionState.status.isGranted) {
                                 val imageFile = createImageFile(context)
@@ -221,32 +255,40 @@ fun MainScreen(
                                 cameraPermissionState.launchPermissionRequest()
                             }
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFA8D8EA)
+                        ),
+                        shape = RoundedCornerShape(15.dp)
                     ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = null)
+                        Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Camera")
+                        Text("Camera", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                     
                     // Gallery button
-                    OutlinedButton(
+                    Button(
                         onClick = {
                             galleryLauncher.launch("image/*")
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFB5EAD7)
+                        ),
+                        shape = RoundedCornerShape(15.dp)
                     ) {
-                        Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Gallery")
+                        Text("Gallery", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
                 
                 // Camera permission rationale
                 if (cameraPermissionState.status.shouldShowRationale) {
                     Text(
-                        text = "Camera permission is needed to take photos",
+                        text = "📷 Camera permission is needed to take photos",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color(0xFFFFC09F)
                     )
                 }
             }
@@ -255,89 +297,107 @@ fun MainScreen(
         // Selected image display with toggle and save functionality
         selectedImageUri?.let { uri ->
             Card(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFFFFFFF).copy(alpha = 0.95f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp)
+                    modifier = Modifier.padding(20.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (showOriginal) "Original Image" else "Edited Image",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        
-                        // Toggle and Save buttons
-                        if (editedImageUrl != null) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    // Title for the panel
+                    Text(
+                        text = if (showOriginal) "📷 Original Image" else "✨ Edited Image",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (showOriginal) Color(0xFF7FC7D9) else Color(0xFFFFB3BA),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
+                    )
+                    
+                    // Toggle and Save buttons
+                    if (editedImageUrl != null) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // First row: Toggle and action buttons
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                // First row: Toggle and action buttons
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                // Toggle button
+                                Button(
+                                    onClick = { viewModel.toggleImageView() },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(40.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFFFF2CC)
+                                    ),
+                                    shape = RoundedCornerShape(20.dp)
                                 ) {
-                                    // Toggle button
-                                    OutlinedButton(
-                                        onClick = { viewModel.toggleImageView() },
-                                        modifier = Modifier.height(36.dp)
-                                    ) {
-                                        Text(
-                                            text = if (showOriginal) "Show Edited" else "Show Original",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                    }
-                                    
-                                    // Action buttons (only show for edited image)
-                                    if (!showOriginal) {
-                                        // Share button
-                                        OutlinedButton(
-                                            onClick = { shareEditedImage() },
-                                            modifier = Modifier.height(36.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Share,
-                                                contentDescription = "Share",
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                        
-                                        // Fullscreen button
-                                        OutlinedButton(
-                                            onClick = { showFullscreenImage = true },
-                                            modifier = Modifier.height(36.dp)
-                                        ) {
-                                            Text(
-                                                text = "Fullscreen",
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                        }
-                                    }
+                                    Text(
+                                        text = if (showOriginal) "🎨 Show Edited" else "📷 Show Original",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF8B7355),
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                                 
-                                // Second row: Save button (only show for edited image)
+                                // Action buttons (only show for edited image)
                                 if (!showOriginal) {
+                                    // Share button
                                     Button(
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                val bitmap = urlToBitmap(editedImageUrl!!)
-                                                bitmap?.let {
-                                                    viewModel.saveEditedImage(context, it)
-                                                }
-                                            }
-                                        },
+                                        onClick = { shareEditedImage() },
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(36.dp)
+                                            .weight(1f)
+                                            .height(40.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFD4ADFC)
+                                        ),
+                                        shape = RoundedCornerShape(20.dp)
                                     ) {
-                                        Text(
-                                            text = "Save to Gallery",
-                                            style = MaterialTheme.typography.bodySmall
+                                        Icon(
+                                            Icons.Default.Share,
+                                            contentDescription = "Share",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = Color.White
                                         )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Share", color = Color.White, fontWeight = FontWeight.Bold)
                                     }
+                                }
+                            }
+                            
+                            // Second row: Save button (only show for edited image)
+                            if (!showOriginal) {
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            val bitmap = urlToBitmap(editedImageUrl!!)
+                                            bitmap?.let {
+                                                viewModel.saveEditedImage(context, it)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(45.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFC7EACD)
+                                    ),
+                                    shape = RoundedCornerShape(22.dp)
+                                ) {
+                                    Text(
+                                        text = "💾 Save to Gallery",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color(0xFF2D5016),
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
                         }
@@ -369,7 +429,21 @@ fun MainScreen(
                             contentDescription = if (showOriginal) "Original image" else "Edited image",
                             modifier = Modifier
                                 .fillMaxSize()
-                                .clip(RoundedCornerShape(8.dp)),
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            Color(0xFFE17055).copy(alpha = 0.1f),
+                                            Color(0xFF74B9FF).copy(alpha = 0.1f)
+                                        )
+                                    )
+                                )
+                                .clickable { 
+                                    // Only allow fullscreen for edited images
+                                    if (!showOriginal && editedImageUrl != null) {
+                                        showFullscreenImage = true
+                                    }
+                                },
                             contentScale = ContentScale.Fit
                         )
                         
@@ -378,26 +452,31 @@ fun MainScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(16.dp))
                                     .background(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                        brush = Brush.radialGradient(
+                                            colors = listOf(
+                                                Color(0xFFE8E4F3).copy(alpha = 0.8f),
+                                                Color(0xFFD1C4E9).copy(alpha = 0.9f)
+                                            )
+                                        )
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
                                     CircularProgressIndicator(
-                                        modifier = Modifier.size(48.dp),
-                                        strokeWidth = 4.dp,
-                                        color = MaterialTheme.colorScheme.primary
+                                        modifier = Modifier.size(60.dp),
+                                        strokeWidth = 6.dp,
+                                        color = Color.White
                                     )
                                     Text(
-                                        text = "Processing image...",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.Medium
+                                        text = "✨ Creating magic...",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color(0xFF8E7CC3),
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
@@ -410,23 +489,30 @@ fun MainScreen(
         // AI Prompts section
         if (selectedImageUri != null) {
             Card(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFFFFFFF).copy(alpha = 0.95f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "AI Image Editor",
+                        text = "🤖 AI Image Editor",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFB19CD9)
                     )
                     
                     // Category selector
                     Text(
-                        text = "Category:",
+                        text = "🎭 Category:",
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF8B7D6B)
                     )
                     
                     // State for category and prompt selection
@@ -472,9 +558,10 @@ fun MainScreen(
                     
                     // Predefined prompts for selected category
                     Text(
-                        text = "Available Prompts:",
+                        text = "🎨 Available Prompts:",
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF8B7D6B)
                     )
                     
                     // Get prompts for the selected category
@@ -527,9 +614,10 @@ fun MainScreen(
                     
                     // Custom prompt
                     Text(
-                        text = "Custom Edit Prompt:",
+                        text = "✍️ Custom Edit Prompt:",
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF8B7D6B)
                     )
                     
                     OutlinedTextField(
@@ -549,17 +637,29 @@ fun MainScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = customPrompt.isNotBlank() && !isProcessing && selectedImageUri != null
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        enabled = customPrompt.isNotBlank() && !isProcessing && selectedImageUri != null,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFF4C2C2)
+                        ),
+                        shape = RoundedCornerShape(25.dp)
                     ) {
                         if (isProcessing) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 3.dp,
+                                color = Color.White
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
                         }
-                        Text(if (isProcessing) "Processing..." else "Edit Image")
+                        Text(
+                            text = if (isProcessing) "🎨 Creating magic..." else "✨ Edit Image",
+                            color = Color(0xFF8B5A3C),
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
                     }
                 }
             }
@@ -570,29 +670,35 @@ fun MainScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
+                    containerColor = Color(0xFFFFD3D3).copy(alpha = 0.9f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp)
+                    modifier = Modifier.padding(20.dp)
                 ) {
                     Text(
-                        text = "Error",
+                        text = "⚠️ Oops!",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = Color.White
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = error,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = Color.White
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.clearError() }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.clearError() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(15.dp)
                     ) {
-                        Text("Dismiss")
+                        Text("👍 Got it!", color = Color(0xFFD64545), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -603,29 +709,35 @@ fun MainScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                    containerColor = Color(0xFFD4EACD).copy(alpha = 0.9f)
+                ),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp)
+                    modifier = Modifier.padding(20.dp)
                 ) {
                     Text(
-                        text = "Success",
+                        text = "🎉 Success!",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = Color.White
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = message,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = Color.White
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.clearSaveMessage() }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.clearSaveMessage() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(15.dp)
                     ) {
-                        Text("Dismiss")
+                        Text("🙌 Awesome!", color = Color(0xFF2D5016), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -656,7 +768,14 @@ private fun FullscreenImageDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF8B8680),
+                            Color(0xFFA19B96)
+                        )
+                    )
+                )
         ) {
             // Close button
             IconButton(
