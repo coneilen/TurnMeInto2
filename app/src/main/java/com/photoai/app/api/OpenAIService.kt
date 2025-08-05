@@ -39,6 +39,21 @@ data class ImageData(
 
 // Retrofit interface for OpenAI API
 interface OpenAIApi {
+    /**
+     * Creates an edited or extended image given an original image and a prompt.
+     * 
+     * @param authorization Bearer token for authentication
+     * @param image The image to edit. Must be a valid PNG file, less than 4MB, and square.
+     * @param mask An additional image whose fully transparent areas indicate where image should be edited. 
+     *             Must be a valid PNG file, less than 4MB, and have the same dimensions as image.
+     * @param prompt A text description of the desired image(s). The maximum length is 1000 characters.
+     * @param model The model to use for image editing. Currently only "dall-e-2" is supported.
+     * @param n The number of images to generate. Must be between 1 and 10. Defaults to 1.
+     * @param size The size of the generated images. Must be one of "256x256", "512x512", "1024x1024", "1024x1536", or "1536x1024". Defaults to "1024x1024".
+     * @param user A unique identifier representing your end-user, which can help OpenAI to monitor and detect abuse.
+     * @param input_fidelity The fidelity of the input image. Accepts "low" or "high". Defaults to "low".
+     * @param quality The quality of the generated image. Accepts "low" or "high". Defaults to "low".
+     */
     @Multipart
     @POST("v1/images/edits")
     suspend fun createImageEdit(
@@ -49,8 +64,10 @@ interface OpenAIApi {
         @Part("model") model: okhttp3.RequestBody? = null,
         @Part("n") n: okhttp3.RequestBody? = null,
         @Part("size") size: okhttp3.RequestBody? = null,
-        @Part("response_format") responseFormat: okhttp3.RequestBody? = null,
-        @Part("user") user: okhttp3.RequestBody? = null
+        @Part("user") user: okhttp3.RequestBody? = null,
+        @Part("input_fidelity") input_fidelity: okhttp3.RequestBody? = "low".toRequestBody("text/plain".toMediaType()),
+        @Part("quality") quality: okhttp3.RequestBody? = "low".toRequestBody("text/plain".toMediaType()),
+
     ): Response<ImageEditResponse>
 }
 
@@ -159,13 +176,19 @@ class OpenAIService {
                 val imagePart = MultipartBody.Part.createFormData("image", "image.png", imageRequestBody)
                 
                 val promptBody = prompt.toRequestBody("text/plain".toMediaType())
+                // Note: Using "gpt-image-1" as specified. Standard OpenAI image editing typically uses "dall-e-2"
                 val modelBody = "gpt-image-1".toRequestBody("text/plain".toMediaType())
                 val nBody = "1".toRequestBody("text/plain".toMediaType())
-                val sizeBody = "1024x1024".toRequestBody("text/plain".toMediaType())
+                val sizeBody = when {
+                    resizedBitmap.width > resizedBitmap.height -> "1536x1024".toRequestBody("text/plain".toMediaType())
+                    resizedBitmap.width < resizedBitmap.height -> "1024x1536".toRequestBody("text/plain".toMediaType())
+                    else -> "1024x1024".toRequestBody("text/plain".toMediaType())
+                }
                 
                 android.util.Log.d("OpenAIService", "Making API call with prompt: $prompt")
                 android.util.Log.d("OpenAIService", "Model: gpt-image-1")
                 android.util.Log.d("OpenAIService", "Size: 1024x1024")
+                android.util.Log.d("OpenAIService", "Response format: b64_json")
                 
                 // Make API call
                 val response = api.createImageEdit(
