@@ -30,6 +30,7 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 - **Image Comparison**: View original and transformed images with toggle
 - **Fullscreen View**: Tap to view images in fullscreen with gesture controls
 - **Save to Gallery**: Save transformed images directly to device gallery
+- **Share Images**: Share transformed images using Android's native share sheet
 
 ### ✏️ **NEW! Editable Prompts System**
 - **Prompt Editor**: Comprehensive in-app editor for customizing all prompts
@@ -46,9 +47,10 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 - **Jetpack Compose**: Declarative UI framework with smooth animations
 - **Category Selection**: Organized dropdown for easy prompt discovery
 - **Processing Overlay**: Visual feedback with spinner during AI operations
-- **Responsive Design**: Optimized for various screen sizes
+- **Responsive Design**: Optimized for various screen sizes with smart button layouts
 - **Loading States**: Progress indicators and comprehensive error handling
 - **Dark/Light Theme**: Automatic theme adaptation
+- **Share Integration**: Native Android share sheet for social media and messaging apps
 
 ## Technical Stack
 
@@ -95,9 +97,9 @@ app/src/main/java/com/photoai/app/
 │   └── FlexiblePromptsData.kt     # Editable prompts data structure
 ├── ui/
 │   ├── screens/
-│   │   ├── MainScreen.kt          # Primary UI with camera, gallery, and AI editing
+│   │   ├── MainScreen.kt          # Primary UI with camera, gallery, AI editing, and sharing
 │   │   ├── PromptsEditorScreen.kt # **NEW!** Comprehensive prompts editor interface
-│   │   └── FullscreenImageDialog.kt # Fullscreen image viewer
+│   │   └── FullscreenImageDialog.kt # Fullscreen image viewer with gesture controls
 │   ├── viewmodel/
 │   │   └── MainViewModel.kt       # State management and business logic
 │   └── theme/                     # Material Design 3 theming
@@ -157,6 +159,14 @@ The app requires the following permissions:
 - `READ_MEDIA_IMAGES` - For gallery access (API 33+)
 - `INTERNET` - For OpenAI API calls
 
+### Sharing Features
+The app includes comprehensive sharing capabilities:
+- **Native Share Sheet**: Tap the share button to open Android's share menu
+- **Multiple Apps**: Share to social media, messaging apps, email, cloud storage
+- **High Quality**: Shares full-resolution edited images in JPEG format
+- **FileProvider**: Secure file sharing using Android's FileProvider API
+- **Automatic Cleanup**: Temporary share files are managed efficiently
+
 ## Architecture
 
 ### MVVM Pattern
@@ -181,6 +191,7 @@ The app requires the following permissions:
 4. **API Upload**: Multipart form data with PNG preservation
 5. **Response Handling**: Base64 to data URL conversion
 6. **Display**: Coil-based image rendering with fallback support
+7. **Share Processing**: JPEG conversion and FileProvider-based secure sharing
 
 ### OpenAI Integration
 - **Model**: GPT-Image-1 for image editing capabilities
@@ -223,6 +234,7 @@ The app requires the following permissions:
 - [x] Custom prompt input capability
 - [x] Image comparison (original vs transformed) with toggle
 - [x] Save to gallery functionality
+- [x] Share images using Android's native share sheet
 
 ### UI/UX Features  
 - [x] Material Design 3 UI with ExperimentalMaterial3Api
@@ -230,6 +242,7 @@ The app requires the following permissions:
 - [x] Processing spinner overlay during AI operations
 - [x] Comprehensive error handling and loading states
 - [x] Responsive design for various screen sizes
+- [x] Native Android share integration with comprehensive app support
 
 ### **NEW! Prompts Editor Features**
 - [x] **Complete prompts editor interface** with card-based layout
@@ -247,6 +260,8 @@ The app requires the following permissions:
 - [x] Memory-efficient bitmap handling
 - [x] Custom timeout configuration for API calls
 - [x] Flexible data structures for prompt management
+- [x] FileProvider-based secure file sharing
+- [x] Cross-app sharing integration
 
 ### Future Enhancements
 - [ ] Prompt sharing and community features
@@ -255,7 +270,7 @@ The app requires the following permissions:
 - [ ] Image history and transformation caching
 - [ ] Batch image processing capabilities
 - [ ] Advanced editing options (masks, variations, style transfer)
-- [ ] Social sharing and export features
+- [ ] Enhanced sharing options (direct social media posting, cloud backup)
 - [ ] User preferences and favorites system
 - [ ] Offline mode with local ML models
 - [ ] Cloud storage integration and sync
