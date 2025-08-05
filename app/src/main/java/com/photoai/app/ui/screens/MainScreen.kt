@@ -4,12 +4,15 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -50,6 +53,9 @@ fun MainScreen(
     val errorMessage by viewModel.errorMessage
     val showOriginal by viewModel.showOriginal
     val saveMessage by viewModel.saveMessage
+    
+    // Fullscreen image state
+    var showFullscreenImage by remember { mutableStateOf(false) }
     
     // Camera permission
     val cameraPermissionState = rememberPermissionState(
@@ -189,6 +195,19 @@ fun MainScreen(
                                         text = if (showOriginal) "Show Edited" else "Show Original",
                                         style = MaterialTheme.typography.bodySmall
                                     )
+                                }
+                                
+                                // Fullscreen button (only show for edited image)
+                                if (!showOriginal) {
+                                    OutlinedButton(
+                                        onClick = { showFullscreenImage = true },
+                                        modifier = Modifier.height(36.dp)
+                                    ) {
+                                        Text(
+                                            text = "Fullscreen",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                 }
                                 
                                 // Save button (only show for edited image)
@@ -466,6 +485,68 @@ fun MainScreen(
                     }
                 }
             }
+        }
+    }
+    
+    // Fullscreen Image Dialog
+    if (showFullscreenImage && editedImageUrl != null) {
+        FullscreenImageDialog(
+            imageUrl = editedImageUrl!!,
+            onDismiss = { showFullscreenImage = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FullscreenImageDialog(
+    imageUrl: String,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface)
+        ) {
+            // Close button
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+            ) {
+                Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                    contentDescription = "Close fullscreen",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // Fullscreen image
+            Image(
+                painter = rememberAsyncImagePainter(
+                    model = imageUrl,
+                    onError = { error ->
+                        android.util.Log.e("MainScreen", "Fullscreen image loading error: ${error.result.throwable}")
+                    }
+                ),
+                contentDescription = "Fullscreen edited image",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .clickable { onDismiss() }, // Allow tap to dismiss
+                contentScale = ContentScale.Fit
+            )
         }
     }
 }
