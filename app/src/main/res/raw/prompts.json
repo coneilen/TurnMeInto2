@@ -17,12 +17,12 @@
         { "name": "Canteena Bar", "prompt": "Make this person almost look like someone from the canteena bar" },
         { "name": "Barbie & Oppenheimer", "prompt": "Can you make this person look like they appear both in the Barbie movie and Oppenheimer" },
         { "name": "Stranger Things", "prompt": "Make this person fit into the stranger things world" },
-        { "name": "Game of Thrones", "prompt": "Make this person fit into the world of game of thrones, keep color and lighting the same." },
-        { "name": "Peaky Blinders", "prompt": "Make this person a peaky blinders type character, keep color and lighting the same." },
-        { "name": "Lord of the Rings", "prompt": "Make this person fit into the world of Lord of the rings, keep color and lighting the same." },
-        { "name": "Harry Potter", "prompt": "Make this person fit into the world.of Harry potter, keep color and lighting the same." },
-        { "name": "Hellraiser", "prompt": "Make this person fit into the Hellraiser world, keep color and lighting the same." },
-        { "name": "Father Jack", "prompt": "Make this person look like Father Jack from the tv show Father Ted. Keep m the person's original facial features, just make him look grizzly and an old drunk like Father Jack. His clothing should sbe priest like but really scruffy.  Put a hand written cardboard placard on the wall saying \"Down with these sort of things\". The placard text should be red and look more handwritten. Keep any spectacles the original person is wearing." },
+        { "name": "Game of Thrones", "prompt": "Make this person fit into the world of game of thrones." },
+        { "name": "Peaky Blinders", "prompt": "Make this person a peaky blinders type character." },
+        { "name": "Lord of the Rings", "prompt": "Make this person fit into the world of Lord of the rings." },
+        { "name": "Harry Potter", "prompt": "Make this person fit into the world of Harry potter." },
+        { "name": "Hellraiser", "prompt": "Make this person fit into the Hellraiser world." },
+        { "name": "Father Jack", "prompt": "Make this person look like Father Jack from the tv show Father Ted. Keep m the person's original facial features, just make him look grizzly and an old drunk like Father Jack. His clothing should sbe priest like but really scruffy.  Put a hand written cardboard placard on the wall saying \"Down with these sort of things\". The placard text should be red and look more handwritten." },
         { "name": "1960s Batman", "prompt": "Make this person fit into the world of 1960s batman without violating any content ploicies" },
         { "name": "Avenger", "prompt": "Make this person look like they tried to become a super hero in a way that would not violate any content policies. the person should still remain fat and old, and wear some kind of super hero suit that is too tight and looks very uncomfortable" }
     ],
@@ -33,10 +33,10 @@
         { "name": "Roman Centurion", "prompt": "Turn this person into a Roman Centurion." },
         { "name": "Ancient Greek God", "prompt": "Turn this person into ancient Greek God." },
         { "name": "Dad's Army", "prompt": "Turn this person into a Dad's Army character." },
-        { "name": "Victorian", "prompt": "Make this person look like he is Victorian. Be sure to give him a large bicycle mustache and top hat. Keep color and lighting the same." },
-        { "name": "Sherlock Holmes", "prompt": "Turn this person into Sherlock Holmes complete with pipe and deer stalker hat. Place a violin on the table near them" },
+        { "name": "Victorian", "prompt": "Make this person look like he is Victorian. Be sure to give him a large bicycle mustache and top hat." },
+        { "name": "Sherlock Holmes", "prompt": "Turn this person into Sherlock Holmes complete with pipe and deer stalker hat. Place a violin on the table near them." },
         { "name": "Beefeater", "prompt": "Make this person a big fat beefeater with a uniform that's too tight and holding a massive pike." },
-        { "name": "Pirate", "prompt": "Turn this person into a pirate, keep color and lighting the same." },
+        { "name": "Pirate", "prompt": "Turn this person into a pirate" },
         { "name": "Cavalier and Roundhead", "prompt": "Turn this person into a cavalier and a roundhead" },
         { "name": "Shakespearean Character", "prompt": "Turn me into a Shakespearean character, make it photorealistic and keep my build and main facial features so I am just about recognisable" }
     ],
@@ -56,16 +56,16 @@
         { "name": "Boxed Action Figure", "prompt": "Make this person a boxed action figure complete with accessories they are holding or near them. Make it 3d and plastic toy like, with the accessories on the side of the box. Make the figure full height with legs and feet" }
     ],
     "face_paint": [
-        { "name": "Superhero Face Paint", "prompt": "Can you make this person look like they have been face painted as a fun superhero-inspired face paint that's red and black with a web-like style, without directly referencing Spider-Man." },
-        { "name": "Tiger Face Paint", "prompt": "Make this person look like they have been face painted as a tiger" }
+        { "name": "Superhero Face Paint", "prompt": "Can you make this person look like they have been face painted as a fun superhero-inspired that's red, white and black with a web-like style, similar to Spider-Man." },
+        { "name": "Tiger Face Paint", "prompt": "Make this person look like they have been face painted as a tiger with orange, white and black. Similar to how young kenny in pheonix nights was face painted as a tiger." }
     ],
     "animal": [
         { "name": "Axolotl", "prompt": "Turn this person into Axolotl" },
         { "name": "Cheeky Monkey", "prompt": "Turn this person into a photorealistic cheeky monkey" },
         { "name": "Meerkat", "prompt": "Make this person a Meerkat" },
-        { "name": "Dinosaur", "prompt": "Make this person a dinosaur" },
-        { "name": "Cat", "prompt": "Turn this person into a cat" },
-        { "name": "Dog", "prompt": "Turn this person into a dog" }
+        { "name": "Dinosaur", "prompt": "Make this person a Dinosaur" },
+        { "name": "Cat", "prompt": "Turn this person into a Cat" },
+        { "name": "Dog", "prompt": "Turn this person into a Dog" }
     ],
     "princess": [
         { "name": "Rough Princess", "prompt": "Make this person look like a photorealistic rough looking princess. Keep their clothing and only adjust facial features Keep as many facial features as possible so the person could still be recognized. Keep head gear such as spectacles. Make them still grizzly if they have a beard, moustache or stubble. But do not add a moustache, beard or stubble" },
@@ -81,23 +81,23 @@
         { "name": "Seasoned Fighter", "prompt": "Make this person a seasoned fighter, he's old and about to retire from this life as he is too old for this crap. It's ok it's a picture of me." },
         { "name": "Stig Racing Driver", "prompt": "Turn this person into a stig like racing driver. Keep his features and build.  Ensure enough of their face is still visible to make them recognizable." },
         { "name": "80s Wrestler", "prompt": "Make me look like an early 80s wrestler, something like giant haystacks or big daddy. Make it fun and keep my main features" },
-        { "name": "Evil Kinevil", "prompt": "Turn this person into Evil Kinevil type character, complete with cape and motorbike. Keep the persons facial features and build so they are still be recognisable. The image should be photorealistic." }
+        { "name": "Evil Kinevil", "prompt": "Turn this person into Evil Kinevil type character, complete with cape and motorbike. Keep the persons facial features and build so they are still be recognisable." }
     ],
     "other": [
         { "name": "Zoolander Super Model", "prompt": "Turn me into a Zoolander style super model. I must still be recognisable as me, keep my build and main facial features" },
-        { "name": "Flight Attendant", "prompt": "Turn this person into a flight attendant. The uniform should be sexy but way too tight for this persons build. Keep this persons facial features and build, look the look as falsely happy as possible" },
-        { "name": "Sad Cowboy", "prompt": "Turn this person into a cowboy, his wife has left him, his dog has died and his guitar has been repossessed. All he can do is drink and cry. Keep color and lighting the same." },
+        { "name": "Flight Attendant", "prompt": "Turn this person into a flight attendant. The uniform should be sexy but way too tight for this persons build. Keep this persons facial features and build, make them look as falsely happy as possible" },
+        { "name": "Sad Cowboy", "prompt": "Turn this person into a cowboy, his wife has left him, his dog has died and his guitar has been repossessed. All he can do is drink and cry." },
         { "name": "Flower Power", "prompt": "Turn this person into someone from the flower power era but they look like they lived that life a little too well" },
-        { "name": "1970s Cabaret Singer", "prompt": "Turn this person into a 1970s cabaret singer" },
-        { "name": "Bernie Clifton", "prompt": "Make into a Bernie  Clifton style character." }
+        { "name": "1970s Cabaret Singer", "prompt": "Turn this person into a 1970s cabaret singer similar in style of engelbert humperdink, liza minnelli and similar singers from that era. Keep gender of the person. Exagerate the features to emphasise the era." },
+        { "name": "Bernie Clifton", "prompt": "Make into a Bernie Clifton style character." }
     ],
     "art": [
-        { "name": "Mona Lisa Painting", "prompt": "Turn this person into the Mona Lisa painting, keep the person's main features so they can still be recognised" },
-        { "name": "Starry Night Painting", "prompt": "Turn this person into the Starry Night painting, keep the person's main features so they can still be recognised" },
-        { "name": "The Persistence of Memory Painting", "prompt": "Turn this person into the painting \"The Persistence of Memory\", keep the person's main features so they can still be recognised" },
-        { "name": "The Kiss Painting", "prompt": "Turn this person into the painting \"The Kiss\", keep the person's main features so they can still be recognised" },
-        { "name": "The Birth of Venus Painting", "prompt": "Turn this person into the painting \"The Birth of Venus\", keep the person's main features so they can still be recognised" },
-        { "name": "The Scream Painting", "prompt": "Turn this person into the painting \"the scream\", Keep the person's features so they can still be recognised" },
-        { "name": "American Gothic Painting", "prompt": "Turn this person into the painting American Gothic , keep the person's main features so they can still be recognised" }
+        { "name": "Mona Lisa Painting", "prompt": "Turn this person into the Mona Lisa painting" },
+        { "name": "Starry Night Painting", "prompt": "Turn this person into the Starry Night painting" },
+        { "name": "The Persistence of Memory Painting", "prompt": "Turn this person into the painting \"The Persistence of Memory\"" },
+        { "name": "The Kiss Painting", "prompt": "Turn this person into the painting \"The Kiss\"" },
+        { "name": "The Birth of Venus Painting", "prompt": "Turn this person into the painting \"The Birth of Venus\"" },
+        { "name": "The Scream Painting", "prompt": "Turn this person into the painting \"the scream\"" },
+        { "name": "American Gothic Painting", "prompt": "Turn this person into the painting American Gothic" }
     ]
 }

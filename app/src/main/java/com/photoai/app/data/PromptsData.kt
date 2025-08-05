@@ -19,8 +19,17 @@ data class PromptsData(
     @SerializedName("sports") val sports: List<PromptCategory> = emptyList(),
     @SerializedName("other") val other: List<PromptCategory> = emptyList(),
     @SerializedName("art") val art: List<PromptCategory> = emptyList(),
-    @SerializedName("toy") val toy: List<PromptCategory> = emptyList()
+    @SerializedName("toy") val toy: List<PromptCategory> = emptyList(),
+    
+    // For custom prompts stored as a flexible map
+    val prompts: Map<String, List<Prompt>> = emptyMap()
 ) {
+    // New simplified prompt data class for editing
+    data class Prompt(
+        val name: String,
+        val prompt: String
+    )
+    
     fun getAllPrompts(): List<Pair<String, PromptCategory>> {
         val allPrompts = mutableListOf<Pair<String, PromptCategory>>()
         
@@ -57,4 +66,27 @@ data class PromptsData(
             else -> emptyList()
         }
     }
+    
+    // Convert to the new flexible format
+    fun toFlexibleFormat(): Map<String, List<Prompt>> {
+        return mapOf(
+            "cartoon" to cartoon.map { Prompt(it.name, it.prompt) },
+            "movie_tv" to movieTv.map { Prompt(it.name, it.prompt) },
+            "historic" to historic.map { Prompt(it.name, it.prompt) },
+            "fantasy" to fantasy.map { Prompt(it.name, it.prompt) },
+            "face_paint" to facePaint.map { Prompt(it.name, it.prompt) },
+            "animal" to animal.map { Prompt(it.name, it.prompt) },
+            "princess" to princess.map { Prompt(it.name, it.prompt) },
+            "ghost_monster" to ghostMonster.map { Prompt(it.name, it.prompt) },
+            "sports" to sports.map { Prompt(it.name, it.prompt) },
+            "other" to other.map { Prompt(it.name, it.prompt) },
+            "art" to art.map { Prompt(it.name, it.prompt) },
+            "toy" to toy.map { Prompt(it.name, it.prompt) }
+        ).plus(prompts)
+    }
 }
+
+// New data class for the flexible format
+data class FlexiblePromptsData(
+    val prompts: Map<String, List<PromptsData.Prompt>>
+)

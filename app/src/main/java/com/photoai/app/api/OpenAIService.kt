@@ -174,8 +174,14 @@ class OpenAIService {
                 // Create multipart request body directly from byte array
                 val imageRequestBody = pngByteArray.toRequestBody("image/png".toMediaType())
                 val imagePart = MultipartBody.Part.createFormData("image", "image.png", imageRequestBody)
-                
-                val promptBody = prompt.toRequestBody("text/plain".toMediaType())
+                val basePrompt = """"Use the following prompt to edit the provided image.
+                The generated image should maintain the facial features and build of the person so they are easily recognizable.
+                You should keep any spectacles the person is wearing.
+                Maintain the color and lighting of the scene.
+                The generated image should be photorealistic.
+                Prompt: 
+                """ + prompt
+                val promptBody = basePrompt.toRequestBody("text/plain".toMediaType())
                 // Note: Using "gpt-image-1" as specified. Standard OpenAI image editing typically uses "dall-e-2"
                 val modelBody = "gpt-image-1".toRequestBody("text/plain".toMediaType())
                 val nBody = "1".toRequestBody("text/plain".toMediaType())

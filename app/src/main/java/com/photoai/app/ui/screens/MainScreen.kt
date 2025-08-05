@@ -57,6 +57,9 @@ fun MainScreen(
     // Fullscreen image state
     var showFullscreenImage by remember { mutableStateOf(false) }
     
+    // Navigation state
+    var showPromptsEditor by remember { mutableStateOf(false) }
+    
     // Camera permission
     val cameraPermissionState = rememberPermissionState(
         android.Manifest.permission.CAMERA
@@ -82,7 +85,16 @@ fun MainScreen(
     )
     
     // Load category names from JSON resource
-    val categoryNames = remember { PromptsLoader.getCategoryNames() }
+    val categoryNames = remember { PromptsLoader.getCategoryNames(context) }
+    
+    // Show PromptsEditorScreen if editing prompts
+    if (showPromptsEditor) {
+        PromptsEditorScreen(
+            onBackClick = { showPromptsEditor = false },
+            modifier = modifier
+        )
+        return
+    }
     
     Column(
         modifier = modifier
@@ -91,12 +103,23 @@ fun MainScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Title
-        Text(
-            text = "Photo AI Assistant",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
+        // Title with edit prompts button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Photo AI Assistant",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(
+                onClick = { showPromptsEditor = true }
+            ) {
+                Text("Edit Prompts")
+            }
+        }
         
         // Image selection buttons
         Card(
@@ -235,29 +258,64 @@ fun MainScreen(
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    // Display the appropriate image
-                    val imageToShow = if (showOriginal || editedImageUrl == null) uri.toString() else editedImageUrl!!
-                    
-                    // Debug logging
-                    if (editedImageUrl != null && !showOriginal) {
-                        android.util.Log.d("MainScreen", "Displaying edited image URL (first 100 chars): ${editedImageUrl!!.take(100)}")
-                        android.util.Log.d("MainScreen", "Is data URL: ${editedImageUrl!!.startsWith("data:image/")}")
-                    }
-                    
-                    Image(
-                        painter = rememberAsyncImagePainter(
-                            model = imageToShow,
-                            onError = { error ->
-                                android.util.Log.e("MainScreen", "Image loading error: ${error.result.throwable}")
-                            }
-                        ),
-                        contentDescription = if (showOriginal) "Original image" else "Edited image",
+                    // Display the appropriate image with processing overlay
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(300.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Fit
-                    )
+                    ) {
+                        val imageToShow = if (showOriginal || editedImageUrl == null) uri.toString() else editedImageUrl!!
+                        
+                        // Debug logging
+                        if (editedImageUrl != null && !showOriginal) {
+                            android.util.Log.d("MainScreen", "Displaying edited image URL (first 100 chars): ${editedImageUrl!!.take(100)}")
+                            android.util.Log.d("MainScreen", "Is data URL: ${editedImageUrl!!.startsWith("data:image/")}")
+                        }
+                        
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                model = imageToShow,
+                                onError = { error ->
+                                    android.util.Log.e("MainScreen", "Image loading error: ${error.result.throwable}")
+                                }
+                            ),
+                            contentDescription = if (showOriginal) "Original image" else "Edited image",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                        
+                        // Processing overlay
+                        if (isProcessing) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(48.dp),
+                                        strokeWidth = 4.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Processing image...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
