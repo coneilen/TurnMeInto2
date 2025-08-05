@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +36,10 @@ import com.photoai.app.utils.createImageFile
 import com.photoai.app.utils.urlToBitmap
 import com.photoai.app.utils.PromptsLoader
 import kotlinx.coroutines.launch
+import android.content.Intent
+import android.graphics.Bitmap
+import java.io.File
+import java.io.FileOutputStream
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -86,6 +91,68 @@ fun MainScreen(
     
     // Load category names from JSON resource
     val categoryNames = remember { PromptsLoader.getCategoryNames(context) }
+    
+    // Share function
+    fun shareEditedImage() {
+        coroutineScope.launch {
+            try {
+                android.util.Log.d("MainScreen", "Starting share process...")
+                val bitmap = urlToBitmap(editedImageUrl!!)
+                bitmap?.let { bmp ->
+                    android.util.Log.d("MainScreen", "Bitmap converted successfully: ${bmp.width}x${bmp.height}")
+                    
+                    // Create a temporary file to share
+                    val shareFile = File(context.cacheDir, "shared_image_${System.currentTimeMillis()}.jpg")
+                    android.util.Log.d("MainScreen", "Creating share file: ${shareFile.absolutePath}")
+                    
+                    val fos = FileOutputStream(shareFile)
+                    val compressed = bmp.compress(Bitmap.CompressFormat.JPEG, 90, fos)
+                    fos.close()
+                    
+                    if (!compressed) {
+                        android.util.Log.e("MainScreen", "Failed to compress bitmap")
+                        return@let
+                    }
+                    
+                    android.util.Log.d("MainScreen", "File created successfully, size: ${shareFile.length()} bytes")
+                    
+                    // Create share intent
+                    val shareUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        shareFile
+                    )
+                    
+                    android.util.Log.d("MainScreen", "Share URI created: $shareUri")
+                    
+                    val shareIntent = Intent().apply {
+                        action = Intent.ACTION_SEND
+                        type = "image/jpeg"
+                        putExtra(Intent.EXTRA_STREAM, shareUri)
+                        putExtra(Intent.EXTRA_TEXT, "Check out my AI-edited photo from Photo AI Assistant!")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    
+                    // Verify that there are apps that can handle this intent
+                    val packageManager = context.packageManager
+                    val activities = packageManager.queryIntentActivities(shareIntent, 0)
+                    
+                    if (activities.isNotEmpty()) {
+                        android.util.Log.d("MainScreen", "Found ${activities.size} apps that can handle share intent")
+                        val chooserIntent = Intent.createChooser(shareIntent, "Share edited image")
+                        context.startActivity(chooserIntent)
+                    } else {
+                        android.util.Log.e("MainScreen", "No apps found that can handle share intent")
+                    }
+                } ?: run {
+                    android.util.Log.e("MainScreen", "Failed to convert URL to bitmap")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainScreen", "Error sharing image: ${e.message}", e)
+                // You could show a toast or error message here
+            }
+        }
+    }
     
     // Show PromptsEditorScreen if editing prompts
     if (showPromptsEditor) {
@@ -206,34 +273,52 @@ fun MainScreen(
                         
                         // Toggle and Save buttons
                         if (editedImageUrl != null) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Toggle button
-                                OutlinedButton(
-                                    onClick = { viewModel.toggleImageView() },
-                                    modifier = Modifier.height(36.dp)
+                                // First row: Toggle and action buttons
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text(
-                                        text = if (showOriginal) "Show Edited" else "Show Original",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                
-                                // Fullscreen button (only show for edited image)
-                                if (!showOriginal) {
+                                    // Toggle button
                                     OutlinedButton(
-                                        onClick = { showFullscreenImage = true },
+                                        onClick = { viewModel.toggleImageView() },
                                         modifier = Modifier.height(36.dp)
                                     ) {
                                         Text(
-                                            text = "Fullscreen",
+                                            text = if (showOriginal) "Show Edited" else "Show Original",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
+                                    
+                                    // Action buttons (only show for edited image)
+                                    if (!showOriginal) {
+                                        // Share button
+                                        OutlinedButton(
+                                            onClick = { shareEditedImage() },
+                                            modifier = Modifier.height(36.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Share,
+                                                contentDescription = "Share",
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                        
+                                        // Fullscreen button
+                                        OutlinedButton(
+                                            onClick = { showFullscreenImage = true },
+                                            modifier = Modifier.height(36.dp)
+                                        ) {
+                                            Text(
+                                                text = "Fullscreen",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                    }
                                 }
                                 
-                                // Save button (only show for edited image)
+                                // Second row: Save button (only show for edited image)
                                 if (!showOriginal) {
                                     Button(
                                         onClick = {
@@ -244,10 +329,12 @@ fun MainScreen(
                                                 }
                                             }
                                         },
-                                        modifier = Modifier.height(36.dp)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(36.dp)
                                     ) {
                                         Text(
-                                            text = "Save",
+                                            text = "Save to Gallery",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
@@ -427,9 +514,8 @@ fun MainScreen(
                                     onClick = {
                                         selectedPrompt = promptCategory.name
                                         expandedDropdown = false
-                                        selectedImageUri?.let { uri ->
-                                            viewModel.editImage(context, uri, promptCategory.prompt)
-                                        }
+                                        // Set the custom prompt text instead of immediately running the AI
+                                        viewModel.updateCustomPrompt(promptCategory.prompt)
                                     },
                                     enabled = !isProcessing && selectedImageUri != null
                                 )
