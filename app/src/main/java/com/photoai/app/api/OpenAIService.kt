@@ -69,6 +69,7 @@ interface OpenAIApi {
         @Part("user") user: okhttp3.RequestBody? = null,
         @Part("input_fidelity") input_fidelity: okhttp3.RequestBody? = "low".toRequestBody("text/plain".toMediaType()),
         @Part("quality") quality: okhttp3.RequestBody? = "low".toRequestBody("text/plain".toMediaType()),
+        @Part("moderation") moderation: okhttp3.RequestBody? = "low".toRequestBody("text/plain".toMediaType()),
 
     ): Response<ImageEditResponse>
 }
