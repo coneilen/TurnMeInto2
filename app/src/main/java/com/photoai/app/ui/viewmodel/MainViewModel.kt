@@ -1,7 +1,9 @@
 package com.photoai.app.ui.viewmodel
 
+import android.app.Application
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -9,10 +11,12 @@ import android.os.Environment
 import android.os.PowerManager
 import android.provider.MediaStore
 import androidx.compose.runtime.mutableStateOf
-import androidx.lifecycle.ViewModel
+import androidx.core.content.FileProvider
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.photoai.app.api.OpenAIService
 import com.photoai.app.utils.PromptsLoader
+import com.photoai.app.utils.urlToBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,7 +24,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
-class MainViewModel : ViewModel() {
+class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val openAIService = OpenAIService.getInstance()
     private var wakeLock: PowerManager.WakeLock? = null
     
@@ -92,7 +96,7 @@ class MainViewModel : ViewModel() {
         try {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(
-                PowerManager.SCREEN_DIM_WAKE_LOCK,
+                PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,
                 "PhotoAI:ImageProcessing"
             )
             wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes max
@@ -240,6 +244,61 @@ class MainViewModel : ViewModel() {
         errorMessage.value = null
     }
     
+    fun shareEditedImage() {
+        viewModelScope.launch {
+            try {
+                if (editedImageUrl.value == null) {
+                    errorMessage.value = "No edited image to share"
+                    return@launch
+                }
+
+                val bitmap = urlToBitmap(editedImageUrl.value!!)
+                bitmap?.let { bmp ->
+                    shareImage(bmp)
+                } ?: run {
+                    errorMessage.value = "Failed to prepare image for sharing"
+                }
+            } catch (e: Exception) {
+                errorMessage.value = "Error sharing image: ${e.message}"
+            }
+        }
+    }
+
+    private suspend fun shareImage(bitmap: Bitmap) {
+        withContext(Dispatchers.IO) {
+            try {
+                // Create a temporary file to share
+                val context = getApplication<Application>()
+                val shareFile = File(context.cacheDir, "shared_image_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(shareFile).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+
+                // Create share intent
+                val shareUri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    shareFile
+                )
+
+                val shareIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, shareUri)
+                    putExtra(Intent.EXTRA_TEXT, "Check out my AI-edited photo!")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                // Create chooser intent
+                val chooserIntent = Intent.createChooser(shareIntent, "Share edited image")
+                chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(chooserIntent)
+            } catch (e: Exception) {
+                throw Exception("Failed to share image: ${e.message}")
+            }
+        }
+    }
+
     fun clearSaveMessage() {
         saveMessage.value = null
     }

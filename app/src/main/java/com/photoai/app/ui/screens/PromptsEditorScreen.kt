@@ -58,7 +58,8 @@ fun PromptsEditorScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .systemBarsPadding()
+            .padding(horizontal = 16.dp)
     ) {
         // Top bar
         Row(
@@ -100,7 +101,8 @@ fun PromptsEditorScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 prompts.forEach { (category, promptsList) ->
                     item {

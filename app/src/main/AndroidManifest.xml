@@ -8,10 +8,8 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     
-    <!-- Internet permission for OpenAI API -->
+    <!-- Internet and wake lock permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
-    
-    <!-- Wake lock permission to prevent sleep during processing -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     
     <!-- Required camera features -->
