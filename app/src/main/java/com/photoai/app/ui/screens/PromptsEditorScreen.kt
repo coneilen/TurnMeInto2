@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.photoai.app.data.PromptsData
@@ -32,19 +33,22 @@ fun PromptsEditorScreen(
     val coroutineScope = rememberCoroutineScope()
     
     var prompts by remember { mutableStateOf<Map<String, List<PromptsData.Prompt>>>(emptyMap()) }
+    var basePrompt by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var showEditPromptDialog by remember { mutableStateOf(false) }
+    var showEditBasePromptDialog by remember { mutableStateOf(false) }
     var selectedCategory by remember { mutableStateOf("") }
     var selectedPromptIndex by remember { mutableStateOf(-1) }
     var editingPrompt by remember { mutableStateOf(PromptsData.Prompt("", "")) }
     var isAddingNewPrompt by remember { mutableStateOf(false) }
     
-    // Load prompts
+    // Load prompts and base prompt
     LaunchedEffect(Unit) {
         try {
             val loadedPrompts = PromptsLoader.loadPrompts(context)
             prompts = loadedPrompts.prompts
+            basePrompt = PromptsLoader.getBasePrompt(context)
             isLoading = false
         } catch (e: Exception) {
             isLoading = false
@@ -74,6 +78,15 @@ fun PromptsEditorScreen(
                 Icon(Icons.Default.Add, contentDescription = "Add Category")
             }
         }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Base Prompt Section
+        BasePromptCard(
+            basePrompt = basePrompt,
+            onEditBasePrompt = { showEditBasePromptDialog = true },
+            modifier = Modifier.fillMaxWidth()
+        )
         
         Spacer(modifier = Modifier.height(16.dp))
         
@@ -138,6 +151,21 @@ fun PromptsEditorScreen(
                     prompts = updatedPrompts
                     PromptsLoader.savePrompts(context, FlexiblePromptsData(updatedPrompts))
                     showAddCategoryDialog = false
+                }
+            }
+        )
+    }
+    
+    // Edit Base Prompt Dialog
+    if (showEditBasePromptDialog) {
+        EditBasePromptDialog(
+            basePrompt = basePrompt,
+            onDismiss = { showEditBasePromptDialog = false },
+            onConfirm = { newBasePrompt ->
+                coroutineScope.launch {
+                    PromptsLoader.saveBasePrompt(context, newBasePrompt)
+                    basePrompt = newBasePrompt
+                    showEditBasePromptDialog = false
                 }
             }
         )
@@ -389,6 +417,129 @@ fun EditPromptDialog(
                         enabled = name.trim().isNotEmpty() && promptText.trim().isNotEmpty()
                     ) {
                         Text(if (isAddingNew) "Add" else "Save")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BasePromptCard(
+    basePrompt: String,
+    onEditBasePrompt: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🎯 Base Prompt",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                IconButton(onClick = onEditBasePrompt) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Edit Base Prompt",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = "This prompt is automatically added before all user prompts.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = basePrompt,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun EditBasePromptDialog(
+    basePrompt: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var promptText by remember { mutableStateOf(basePrompt) }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = "Edit Base Prompt",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "This prompt will be automatically added before all user prompts when calling the AI service.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = promptText,
+                    onValueChange = { promptText = it },
+                    label = { Text("Base Prompt Text") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 5,
+                    maxLines = 10
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { 
+                            onConfirm(promptText.trim())
+                        },
+                        enabled = promptText.trim().isNotEmpty()
+                    ) {
+                        Text("Save")
                     }
                 }
             }

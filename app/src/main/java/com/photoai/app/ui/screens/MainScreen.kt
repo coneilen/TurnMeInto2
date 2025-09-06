@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -60,6 +61,14 @@ fun MainScreen(
     val errorMessage by viewModel.errorMessage
     val showOriginal by viewModel.showOriginal
     val saveMessage by viewModel.saveMessage
+    val downsizeImages by viewModel.downsizeImages
+    val inputFidelity by viewModel.inputFidelity
+    val quality by viewModel.quality
+    
+    // Load preferences on startup
+    LaunchedEffect(Unit) {
+        viewModel.loadProcessingPreferences(context)
+    }
     
     // Fullscreen image state
     var showFullscreenImage by remember { mutableStateOf(false) }
@@ -629,6 +638,120 @@ fun MainScreen(
                         maxLines = 4
                     )
                     
+                                        // Image processing options
+                    Column {
+                        Text(
+                            text = "🔧 Processing Options:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7D6B)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // Downsize toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Downsize image",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFF8B7D6B)
+                            )
+                            
+                            Switch(
+                                checked = downsizeImages,
+                                onCheckedChange = { viewModel.setDownsizeImages(context, it) },
+                                enabled = !isProcessing
+                            )
+                        }
+                        
+                        Text(
+                            text = if (downsizeImages) "⚡ Faster processing, lower quality" else "🎯 Full resolution, slower processing",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF8B7D6B).copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Input Fidelity toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Input fidelity",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFF8B7D6B)
+                            )
+                            
+                            Switch(
+                                checked = inputFidelity == "high",
+                                onCheckedChange = { 
+                                    viewModel.setInputFidelity(context, if (it) "high" else "low")
+                                },
+                                enabled = !isProcessing
+                            )
+                        }
+                        
+                        Text(
+                            text = if (inputFidelity == "high") "🔍 High detail preservation" else "📷 Standard detail",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF8B7D6B).copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Quality selection
+                        Column {
+                            Text(
+                                text = "Output quality",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFF8B7D6B)
+                            )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf("low", "medium", "high").forEach { qualityOption ->
+                                    FilterChip(
+                                        onClick = { 
+                                            viewModel.setQuality(context, qualityOption)
+                                        },
+                                        label = { 
+                                            Text(
+                                                text = qualityOption.replaceFirstChar { it.uppercase() },
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        },
+                                        selected = quality == qualityOption,
+                                        enabled = !isProcessing,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                            
+                            Text(
+                                text = when (quality) {
+                                    "high" -> "� Best quality, slowest processing"
+                                    "medium" -> "⚖️ Balanced quality and speed"
+                                    else -> "⚡ Fastest processing, basic quality"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF8B7D6B).copy(alpha = 0.7f),
+                                modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+                            )
+                        }
+                    }
+                    
                     Button(
                         onClick = {
                             if (customPrompt.isNotBlank()) {
@@ -659,6 +782,19 @@ fun MainScreen(
                             color = Color(0xFF8B5A3C),
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                    
+                    // Processing note
+                    if (isProcessing) {
+                        Text(
+                            text = "📱 Screen will stay awake during processing",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF8B7D6B).copy(alpha = 0.8f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            textAlign = TextAlign.Center
                         )
                     }
                 }

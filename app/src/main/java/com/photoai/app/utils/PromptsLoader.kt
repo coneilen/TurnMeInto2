@@ -12,9 +12,26 @@ import java.io.InputStreamReader
 object PromptsLoader {
     private const val PREFS_NAME = "prompts_data"
     private const val KEY_CUSTOM_PROMPTS = "custom_prompts"
+    private const val KEY_BASE_PROMPT = "base_prompt"
+    private const val KEY_DOWNSIZE_IMAGES = "downsize_images"
+    private const val KEY_INPUT_FIDELITY = "input_fidelity"
+    private const val KEY_QUALITY = "quality"
     
     private var cachedPromptsData: PromptsData? = null
     private var cachedFlexiblePrompts: Map<String, List<PromptsData.Prompt>>? = null
+    private var cachedBasePrompt: String? = null
+    private var cachedDownsizeImages: Boolean? = null
+    private var cachedInputFidelity: String? = null
+    private var cachedQuality: String? = null
+    
+    // Default base prompt
+    private const val DEFAULT_BASE_PROMPT = """Use the following prompt to edit the provided image.
+The generated image should maintain the facial features and build of the person so they are easily recognizable.
+You should keep any spectacles the person is wearing.
+Maintain the color and lighting of the scene.
+The generated image should be photorealistic.
+Prompt: 
+"""
     
     /**
      * Load prompts in the new flexible format that supports editing
@@ -179,15 +196,129 @@ object PromptsLoader {
     }
     
     /**
+     * Get base prompt for OpenAI API calls
+     */
+    fun getBasePrompt(context: Context): String {
+        cachedBasePrompt?.let { return it }
+        
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val basePrompt = prefs.getString(KEY_BASE_PROMPT, DEFAULT_BASE_PROMPT) ?: DEFAULT_BASE_PROMPT
+        
+        cachedBasePrompt = basePrompt
+        return basePrompt
+    }
+    
+    /**
+     * Save base prompt to SharedPreferences
+     */
+    fun saveBasePrompt(context: Context, basePrompt: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_BASE_PROMPT, basePrompt)
+            .apply()
+        
+        // Clear cache so next load will use updated data
+        cachedBasePrompt = null
+    }
+    
+    /**
+     * Get downsize images preference
+     */
+    fun getDownsizeImages(context: Context): Boolean {
+        cachedDownsizeImages?.let { return it }
+        
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val downsizeImages = prefs.getBoolean(KEY_DOWNSIZE_IMAGES, true) // Default to true for backward compatibility
+        
+        cachedDownsizeImages = downsizeImages
+        return downsizeImages
+    }
+    
+    /**
+     * Save downsize images preference to SharedPreferences
+     */
+    fun saveDownsizeImages(context: Context, downsizeImages: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean(KEY_DOWNSIZE_IMAGES, downsizeImages)
+            .apply()
+        
+        // Clear cache so next load will use updated data
+        cachedDownsizeImages = null
+    }
+    
+    /**
+     * Get input fidelity preference
+     */
+    fun getInputFidelity(context: Context): String {
+        cachedInputFidelity?.let { return it }
+        
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val inputFidelity = prefs.getString(KEY_INPUT_FIDELITY, "low") ?: "low" // Default to "low"
+        
+        cachedInputFidelity = inputFidelity
+        return inputFidelity
+    }
+    
+    /**
+     * Save input fidelity preference to SharedPreferences
+     */
+    fun saveInputFidelity(context: Context, inputFidelity: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_INPUT_FIDELITY, inputFidelity)
+            .apply()
+        
+        // Clear cache so next load will use updated data
+        cachedInputFidelity = null
+    }
+    
+    /**
+     * Get quality preference
+     */
+    fun getQuality(context: Context): String {
+        cachedQuality?.let { return it }
+        
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val quality = prefs.getString(KEY_QUALITY, "low") ?: "low" // Default to "low"
+        
+        cachedQuality = quality
+        return quality
+    }
+    
+    /**
+     * Save quality preference to SharedPreferences
+     */
+    fun saveQuality(context: Context, quality: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_QUALITY, quality)
+            .apply()
+        
+        // Clear cache so next load will use updated data
+        cachedQuality = null
+    }
+    
+    /**
      * Reset to default prompts
      */
     fun resetToDefaults(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().remove(KEY_CUSTOM_PROMPTS).apply()
+        prefs.edit()
+            .remove(KEY_CUSTOM_PROMPTS)
+            .remove(KEY_BASE_PROMPT)
+            .remove(KEY_DOWNSIZE_IMAGES)
+            .remove(KEY_INPUT_FIDELITY)
+            .remove(KEY_QUALITY)
+            .apply()
         
         // Clear caches
         cachedFlexiblePrompts = null
         cachedPromptsData = null
+        cachedBasePrompt = null
+        cachedDownsizeImages = null
+        cachedInputFidelity = null
+        cachedQuality = null
     }
     
     /**
@@ -196,5 +327,9 @@ object PromptsLoader {
     fun clearCache() {
         cachedPromptsData = null
         cachedFlexiblePrompts = null
+        cachedBasePrompt = null
+        cachedDownsizeImages = null
+        cachedInputFidelity = null
+        cachedQuality = null
     }
 }

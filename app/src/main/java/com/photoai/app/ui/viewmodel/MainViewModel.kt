@@ -6,11 +6,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.photoai.app.api.OpenAIService
+import com.photoai.app.utils.PromptsLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,6 +22,7 @@ import java.io.IOException
 
 class MainViewModel : ViewModel() {
     private val openAIService = OpenAIService.getInstance()
+    private var wakeLock: PowerManager.WakeLock? = null
     
     var selectedImageUri = mutableStateOf<Uri?>(null)
         private set
@@ -42,6 +45,15 @@ class MainViewModel : ViewModel() {
     var saveMessage = mutableStateOf<String?>(null)
         private set
     
+    var downsizeImages = mutableStateOf(true)
+        private set
+    
+    var inputFidelity = mutableStateOf("low") // "low" or "high"
+        private set
+    
+    var quality = mutableStateOf("low") // "low", "medium", or "high"
+        private set
+    
     fun setSelectedImage(uri: Uri?) {
         selectedImageUri.value = uri
         // Clear previous results when new image is selected
@@ -55,6 +67,55 @@ class MainViewModel : ViewModel() {
         customPrompt.value = prompt
     }
     
+    fun setDownsizeImages(context: Context, downsize: Boolean) {
+        downsizeImages.value = downsize
+        PromptsLoader.saveDownsizeImages(context, downsize)
+    }
+    
+    fun setInputFidelity(context: Context, fidelity: String) {
+        inputFidelity.value = fidelity
+        PromptsLoader.saveInputFidelity(context, fidelity)
+    }
+    
+    fun setQuality(context: Context, qualityValue: String) {
+        quality.value = qualityValue
+        PromptsLoader.saveQuality(context, qualityValue)
+    }
+    
+    fun loadProcessingPreferences(context: Context) {
+        downsizeImages.value = PromptsLoader.getDownsizeImages(context)
+        inputFidelity.value = PromptsLoader.getInputFidelity(context)
+        quality.value = PromptsLoader.getQuality(context)
+    }
+    
+    private fun acquireWakeLock(context: Context) {
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.SCREEN_DIM_WAKE_LOCK,
+                "PhotoAI:ImageProcessing"
+            )
+            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes max
+            android.util.Log.d("MainViewModel", "Wake lock acquired")
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to acquire wake lock: ${e.message}")
+        }
+    }
+    
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                    android.util.Log.d("MainViewModel", "Wake lock released")
+                }
+            }
+            wakeLock = null
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to release wake lock: ${e.message}")
+        }
+    }
+    
     fun toggleImageView() {
         if (editedImageUrl.value != null) {
             showOriginal.value = !showOriginal.value
@@ -63,11 +124,14 @@ class MainViewModel : ViewModel() {
     
     fun editImage(context: Context, uri: Uri, prompt: String) {
         viewModelScope.launch {
-            isProcessing.value = true
-            errorMessage.value = null
-            
             try {
-                val result = openAIService.editImage(context, uri, prompt)
+                isProcessing.value = true
+                errorMessage.value = null
+                
+                // Acquire wake lock to prevent screen from sleeping
+                acquireWakeLock(context)
+                
+                val result = openAIService.editImage(context, uri, prompt, downsizeImages.value, inputFidelity.value, quality.value)
                 
                 result.fold(
                     onSuccess = { imageUrl ->
@@ -95,6 +159,8 @@ class MainViewModel : ViewModel() {
                 editedImageUrl.value = null
             } finally {
                 isProcessing.value = false
+                // Release wake lock when processing is complete
+                releaseWakeLock()
             }
         }
     }
@@ -176,5 +242,11 @@ class MainViewModel : ViewModel() {
     
     fun clearSaveMessage() {
         saveMessage.value = null
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        // Ensure wake lock is released when ViewModel is destroyed
+        releaseWakeLock()
     }
 }

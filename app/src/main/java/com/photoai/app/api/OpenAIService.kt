@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import com.google.gson.annotations.SerializedName
 import com.photoai.app.BuildConfig
+import com.photoai.app.utils.uriToBitmapWithCorrectOrientation
+import com.photoai.app.utils.PromptsLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -109,7 +111,14 @@ class OpenAIService {
         return resizedBitmap
     }
     
-    suspend fun editImage(context: Context, uri: Uri, prompt: String): Result<String> {
+    suspend fun editImage(
+        context: Context, 
+        uri: Uri, 
+        prompt: String, 
+        downsizeImage: Boolean = true,
+        inputFidelity: String = "low", // "low" or "high"
+        quality: String = "low" // "low", "medium", or "high"
+    ): Result<String> {
         return withContext(Dispatchers.IO) {
             try {
                 if (BuildConfig.OPENAI_API_KEY.isBlank()) {
@@ -118,16 +127,9 @@ class OpenAIService {
                     )
                 }
                 
-                // Load the image as a bitmap first
-                val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: return@withContext Result.failure(Exception("Unable to open image file"))
-                
-                val originalBitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream.close()
-                
-                if (originalBitmap == null) {
-                    return@withContext Result.failure(Exception("Unable to decode image file"))
-                }
+                // Load the image as a bitmap with correct orientation first
+                val originalBitmap = uriToBitmapWithCorrectOrientation(context, uri)
+                    ?: return@withContext Result.failure(Exception("Unable to load and orient image file"))
                 
                 // Ensure the original bitmap is in ARGB_8888 format (RGBA)
                 val rgbaOriginalBitmap = if (originalBitmap.config != Bitmap.Config.ARGB_8888) {
@@ -138,16 +140,45 @@ class OpenAIService {
                     originalBitmap
                 }
                 
-                // Resize the bitmap to half its dimensions
-                val resizedBitmap = resizeBitmapToHalf(rgbaOriginalBitmap)
+                // Conditionally resize the bitmap based on downsizeImage parameter
+                val processedBitmap = if (downsizeImage) {
+                    resizeBitmapToHalf(rgbaOriginalBitmap)
+                } else {
+                    // If not downsizing, still ensure minimum size requirements
+                    val width = rgbaOriginalBitmap.width
+                    val height = rgbaOriginalBitmap.height
+                    
+                    if (width < 64 || height < 64) {
+                        // If image is too small, resize to minimum 64x64
+                        val finalWidth = if (width < 64) 64 else width
+                        val finalHeight = if (height < 64) 64 else height
+                        
+                        val resizedBitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(resizedBitmap)
+                        
+                        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+                        val srcRect = android.graphics.Rect(0, 0, width, height)
+                        val destRect = android.graphics.Rect(0, 0, finalWidth, finalHeight)
+                        canvas.drawBitmap(rgbaOriginalBitmap, srcRect, destRect, paint)
+                        
+                        if (rgbaOriginalBitmap != originalBitmap) {
+                            rgbaOriginalBitmap.recycle()
+                        }
+                        resizedBitmap
+                    } else {
+                        // Image is already acceptable size, use as-is
+                        rgbaOriginalBitmap
+                    }
+                }
                 
                 android.util.Log.d("OpenAIService", "Original size: ${rgbaOriginalBitmap.width}x${rgbaOriginalBitmap.height}")
-                android.util.Log.d("OpenAIService", "Resized size: ${resizedBitmap.width}x${resizedBitmap.height}")
-                android.util.Log.d("OpenAIService", "Bitmap config: ${resizedBitmap.config}")
+                android.util.Log.d("OpenAIService", "Processed size: ${processedBitmap.width}x${processedBitmap.height}")
+                android.util.Log.d("OpenAIService", "Downsize enabled: $downsizeImage")
+                android.util.Log.d("OpenAIService", "Bitmap config: ${processedBitmap.config}")
                 
                 // Convert bitmap directly to PNG byte array to preserve RGBA
                 val byteArrayOutputStream = ByteArrayOutputStream()
-                val success = resizedBitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream)
+                val success = processedBitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream)
                 
                 if (!success) {
                     return@withContext Result.failure(Exception("Failed to compress bitmap to PNG"))
@@ -166,34 +197,38 @@ class OpenAIService {
                 }
                 
                 // Clean up bitmaps
-                if (rgbaOriginalBitmap != resizedBitmap) {
+                if (rgbaOriginalBitmap != processedBitmap) {
                     rgbaOriginalBitmap.recycle()
                 }
-                resizedBitmap.recycle()
+                if (processedBitmap != originalBitmap) {
+                    processedBitmap.recycle()
+                }
                 
                 // Create multipart request body directly from byte array
                 val imageRequestBody = pngByteArray.toRequestBody("image/png".toMediaType())
                 val imagePart = MultipartBody.Part.createFormData("image", "image.png", imageRequestBody)
-                val basePrompt = """"Use the following prompt to edit the provided image.
-                The generated image should maintain the facial features and build of the person so they are easily recognizable.
-                You should keep any spectacles the person is wearing.
-                Maintain the color and lighting of the scene.
-                The generated image should be photorealistic.
-                Prompt: 
-                """ + prompt
-                val promptBody = basePrompt.toRequestBody("text/plain".toMediaType())
+                
+                // Get editable base prompt from PromptsLoader
+                val basePrompt = PromptsLoader.getBasePrompt(context)
+                val fullPrompt = basePrompt + prompt
+                
+                val promptBody = fullPrompt.toRequestBody("text/plain".toMediaType())
                 // Note: Using "gpt-image-1" as specified. Standard OpenAI image editing typically uses "dall-e-2"
                 val modelBody = "gpt-image-1".toRequestBody("text/plain".toMediaType())
                 val nBody = "1".toRequestBody("text/plain".toMediaType())
                 val sizeBody = when {
-                    resizedBitmap.width > resizedBitmap.height -> "1536x1024".toRequestBody("text/plain".toMediaType())
-                    resizedBitmap.width < resizedBitmap.height -> "1024x1536".toRequestBody("text/plain".toMediaType())
+                    processedBitmap.width > processedBitmap.height -> "1536x1024".toRequestBody("text/plain".toMediaType())
+                    processedBitmap.width < processedBitmap.height -> "1024x1536".toRequestBody("text/plain".toMediaType())
                     else -> "1024x1024".toRequestBody("text/plain".toMediaType())
                 }
+                val inputFidelityBody = inputFidelity.toRequestBody("text/plain".toMediaType())
+                val qualityBody = quality.toRequestBody("text/plain".toMediaType())
                 
                 android.util.Log.d("OpenAIService", "Making API call with prompt: $prompt")
                 android.util.Log.d("OpenAIService", "Model: gpt-image-1")
-                android.util.Log.d("OpenAIService", "Size: 1024x1024")
+                android.util.Log.d("OpenAIService", "Input Fidelity: $inputFidelity")
+                android.util.Log.d("OpenAIService", "Quality: $quality")
+                android.util.Log.d("OpenAIService", "Size: ${if (processedBitmap.width > processedBitmap.height) "1536x1024" else if (processedBitmap.width < processedBitmap.height) "1024x1536" else "1024x1024"}")
                 android.util.Log.d("OpenAIService", "Response format: b64_json")
                 
                 // Make API call
@@ -205,7 +240,9 @@ class OpenAIService {
                     model = modelBody,
                     n = nBody,
                     size = sizeBody,
-                    user = null
+                    user = null,
+                    input_fidelity = inputFidelityBody,
+                    quality = qualityBody
                 )
                 
                 if (response.isSuccessful) {
