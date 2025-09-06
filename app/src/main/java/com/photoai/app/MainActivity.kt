@@ -4,62 +4,53 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.photoai.app.ui.screens.*
 import com.photoai.app.ui.theme.PhotoAITheme
 import com.photoai.app.ui.viewmodel.MainViewModel
-
-sealed class Screen {
-    object Landing : Screen()
-    data class Edit(val imageUri: Uri) : Screen()
-    data class Result(val originalUri: Uri, val editedUrl: String) : Screen()
-    object Settings : Screen()
-    object PromptsEditor : Screen()
-}
+import com.photoai.app.ui.viewmodel.Screen
 
 class MainActivity : ComponentActivity() {
+    private val viewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        viewModel.loadProcessingPreferences(this)
         setContent {
             PhotoAITheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: MainViewModel = viewModel()
-                    var currentScreen by remember { mutableStateOf<Screen>(Screen.Landing) }
 
                     // Monitor editedImageUrl and navigate to Result screen when it becomes available
                     LaunchedEffect(viewModel.editedImageUrl.value) {
                         viewModel.editedImageUrl.value?.let { editedUrl ->
-                            if (currentScreen is Screen.Edit) {
-                                val imageUri = (currentScreen as Screen.Edit).imageUri
-                                currentScreen = Screen.Result(imageUri, editedUrl)
+                            if (viewModel.currentScreen.value is Screen.Edit) {
+                                val imageUri = (viewModel.currentScreen.value as Screen.Edit).imageUri
+                                viewModel.currentScreen.value = Screen.Result(imageUri, editedUrl)
                             }
                         }
                     }
                     
-                    when (val screen = currentScreen) {
+                    when (val screen = viewModel.currentScreen.value) {
                         is Screen.Landing -> {
                             LandingScreen(
-                                onImageSelected = { uri ->
-                                    uri?.let {
-                                        viewModel.setSelectedImage(it)
-                                        currentScreen = Screen.Edit(it)
-                                    }
+                                onImageSelected = { uri -> 
+                                    uri?.let { viewModel.setSelectedImage(it) }
                                 }
                             )
                         }
                         is Screen.Edit -> {
                             EditScreen(
                                 imageUri = screen.imageUri,
-                                onSettingsClick = { currentScreen = Screen.Settings },
-                                onBackClick = { currentScreen = Screen.Landing },
+                                onSettingsClick = { viewModel.navigateToSettings() },
+                                onBackClick = { viewModel.navigateBack() },
                                 viewModel = viewModel
                             )
                         }
@@ -67,26 +58,21 @@ class MainActivity : ComponentActivity() {
                             ResultScreen(
                                 originalImageUri = screen.originalUri,
                                 editedImageUrl = screen.editedUrl,
-                                onBackClick = { currentScreen = Screen.Edit(screen.originalUri) },
+                                onBackClick = { viewModel.navigateBack() },
                                 onSave = { bitmap -> viewModel.saveEditedImage(this, bitmap) },
                                 onShare = { viewModel.shareEditedImage() }
                             )
                         }
                         is Screen.Settings -> {
                             SettingsScreen(
-                                onBackClick = {
-                                    currentScreen = when {
-                                        viewModel.selectedImageUri.value != null -> Screen.Edit(viewModel.selectedImageUri.value!!)
-                                        else -> Screen.Landing
-                                    }
-                                },
-                                onEditPromptsClick = { currentScreen = Screen.PromptsEditor },
+                                onBackClick = { viewModel.navigateBack() },
+                                onEditPromptsClick = { viewModel.navigateToPromptsEditor() },
                                 viewModel = viewModel
                             )
                         }
                         is Screen.PromptsEditor -> {
                             PromptsEditorScreen(
-                                onBackClick = { currentScreen = Screen.Settings },
+                                onBackClick = { viewModel.navigateBack() },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }

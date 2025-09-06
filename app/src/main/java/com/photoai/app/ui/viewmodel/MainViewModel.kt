@@ -24,10 +24,21 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
+sealed class Screen {
+    object Landing : Screen()
+    data class Edit(val imageUri: Uri) : Screen()
+    data class Result(val originalUri: Uri, val editedUrl: String) : Screen()
+    object Settings : Screen()
+    object PromptsEditor : Screen()
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val openAIService = OpenAIService.getInstance()
     private var wakeLock: PowerManager.WakeLock? = null
-    
+
+    var currentScreen = mutableStateOf<Screen>(Screen.Landing)
+        private set
+
     var selectedImageUri = mutableStateOf<Uri?>(null)
         private set
     
@@ -65,6 +76,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         errorMessage.value = null
         showOriginal.value = true
         saveMessage.value = null
+        
+        uri?.let {
+            currentScreen.value = Screen.Edit(it)
+        }
+    }
+
+    fun navigateToSettings() {
+        currentScreen.value = Screen.Settings
+    }
+
+    fun navigateBack() {
+        currentScreen.value = when (currentScreen.value) {
+            is Screen.Edit -> Screen.Landing
+            is Screen.Result -> Screen.Edit((currentScreen.value as Screen.Result).originalUri)
+            is Screen.Settings -> {
+                if (selectedImageUri.value != null) Screen.Edit(selectedImageUri.value!!)
+                else Screen.Landing
+            }
+            is Screen.PromptsEditor -> Screen.Settings
+            else -> Screen.Landing
+        }
+    }
+
+    fun navigateToPromptsEditor() {
+        currentScreen.value = Screen.PromptsEditor
     }
     
     fun updateCustomPrompt(prompt: String) {
