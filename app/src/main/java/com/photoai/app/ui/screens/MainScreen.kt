@@ -109,6 +109,7 @@ private fun HelpDialog(
     modifier: Modifier = Modifier
 ) {
     AlertDialog(
+        modifier = modifier,
         onDismissRequest = onDismiss,
         containerColor = Color(0xFFFFFFFF).copy(alpha = 0.95f),
         title = {

@@ -374,9 +374,7 @@ class OpenAIService {
                     processedBitmap.width < processedBitmap.height -> "1024x1536".toRequestBody("text/plain".toMediaType())
                     else -> "1024x1024".toRequestBody("text/plain".toMediaType())
                 }
-                val inputFidelityBody = inputFidelity.toRequestBody("text/plain".toMediaType())
-                val qualityBody = quality.toRequestBody("text/plain".toMediaType())
-                
+
                 android.util.Log.d("OpenAIService", "Making API call with prompt: $prompt")
                 android.util.Log.d("OpenAIService", "Model: gpt-image-1")
                 android.util.Log.d("OpenAIService", "Input Fidelity: $inputFidelity")
