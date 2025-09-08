@@ -27,12 +27,23 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 - **Smart Selection**: Two-tier dropdown system (category → specific prompt)
 - **Custom Prompts**: Enter personalized transformation requests
 - **Real-time Processing**: Live AI image editing with progress indicators
-- **Image Comparison**: View original and transformed images with toggle
+- **Image Comparison**: Side-by-side view of original and transformed images with horizontal pager
 - **Fullscreen View**: Tap to view images in fullscreen with gesture controls
 - **Save to Gallery**: Save transformed images directly to device gallery
 - **Share Images**: Share transformed images using Android's native share sheet
 
-### ✏️ **NEW! Editable Prompts System**
+### ⚙️ Advanced Settings
+- **Image Processing Options**:
+  - Downsize Images: Toggle for smaller file sizes and faster processing
+  - Input Fidelity: Choose between Standard and High detail preservation
+  - Output Quality: Fast, Balanced, or Best options for processing time vs. quality
+- **Processing Controls**:
+  - Progress indicators with detailed status messages
+  - Screen-on lock during processing
+  - Cancellable operations
+- **Custom Commands**: Quick actions using "/" commands in the prompt field
+
+### ✏️ Prompts Management
 - **Prompt Editor**: Comprehensive in-app editor for customizing all prompts
 - **Add Categories**: Create unlimited custom prompt categories
 - **Add/Edit Prompts**: Modify existing prompts or create completely new ones
@@ -56,7 +67,7 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 
 - **Language**: Kotlin 1.9.20
 - **UI Framework**: Jetpack Compose with Material Design 3
-- **Build System**: Gradle 8.7 with Android Gradle Plugin 8.4.0
+- **Build System**: Gradle 8.4.0 with Android Gradle Plugin 8.4.0
 - **Minimum SDK**: 24 (Android 7.0)
 - **Target SDK**: 34 (Android 14)
 - **AI Integration**: OpenAI API with custom Retrofit implementation
@@ -65,6 +76,11 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 ## Key Dependencies
 
 ```gradle
+// Core dependencies
+androidx.core:core-ktx:1.12.0
+androidx.lifecycle:lifecycle-runtime-ktx:2.7.0
+androidx.activity:activity-compose:1.8.2
+
 // Compose BOM for consistent versions
 androidx.compose:compose-bom:2023.10.01
 
@@ -75,10 +91,15 @@ androidx.camera:camera-view:1.3.1
 
 // Image loading with data URL support
 io.coil-kt:coil-compose:2.5.0
+androidx.exifinterface:exifinterface:1.3.6
+
+// Navigation
+androidx.navigation:navigation-compose:2.7.6
 
 // OpenAI API integration
 com.squareup.retrofit2:retrofit:2.9.0
-com.squareup.retrofit2:converter-gson:2.10.1
+com.squareup.retrofit2:converter-gson:2.9.0
+com.google.code.gson:gson:2.10.1
 com.squareup.okhttp3:okhttp:4.12.0
 
 // Permissions handling
@@ -91,25 +112,28 @@ com.google.accompanist:accompanist-permissions:0.32.0
 app/src/main/java/com/photoai/app/
 ├── MainActivity.kt                 # Main entry point with Compose setup
 ├── api/
-│   └── OpenAIService.kt           # Custom OpenAI API integration with gpt-image-1
+│   └── OpenAIService.kt           # Custom OpenAI API integration
 ├── data/
-│   ├── PromptsData.kt             # Data classes for prompt categories and flexible format
-│   └── FlexiblePromptsData.kt     # Editable prompts data structure
+│   └── PromptsData.kt            # Prompt categories and flexible format
 ├── ui/
 │   ├── screens/
-│   │   ├── MainScreen.kt          # Primary UI with camera, gallery, AI editing, and sharing
-│   │   ├── PromptsEditorScreen.kt # **NEW!** Comprehensive prompts editor interface
-│   │   └── FullscreenImageDialog.kt # Fullscreen image viewer with gesture controls
+│   │   ├── MainScreen.kt         # Primary UI with camera and gallery
+│   │   ├── EditScreen.kt         # Image editing interface with real-time preview
+│   │   ├── SettingsScreen.kt     # App settings and processing options
+│   │   ├── ResultScreen.kt       # Transformed image display and sharing
+│   │   ├── PromptsEditorScreen.kt # Prompt management interface
+│   │   ├── LandingScreen.kt      # App entry point and navigation
+│   │   └── FullScreenImageDialog.kt # Fullscreen image viewer
 │   ├── viewmodel/
-│   │   └── MainViewModel.kt       # State management and business logic
-│   └── theme/                     # Material Design 3 theming
+│   │   └── MainViewModel.kt      # State management and business logic
+│   └── theme/                    # Material Design 3 theming
 ├── utils/
-│   ├── FileUtils.kt              # Image processing and file utilities
-│   └── PromptsLoader.kt          # JSON resource + SharedPreferences management
+│   ├── FileUtils.kt             # Image processing utilities
+│   └── PromptsLoader.kt         # Prompt management system
 └── res/
     ├── raw/
-    │   └── prompts.json          # Default prompt library (12 categories, 80+ prompts)
-    └── ...                       # Other resources (strings, themes, manifests)
+    │   └── prompts.json         # Default prompt library
+    └── ...                      # Other resources
 ```
 
 ## Configuration
@@ -131,152 +155,71 @@ OPENAI_API_KEY=your-openai-api-key-here
 ### Prerequisites
 - Android Studio Hedgehog or later
 - Android SDK 34
-- Kotlin 1.9.10+
+- Kotlin 1.9.20
 
 ### Setup
 1. Clone the repository
-2. Set up your OpenAI API key in `local.properties`:
-   ```properties
-   OPENAI_API_KEY=your-openai-api-key-here
-   ```
+2. Set up your OpenAI API key in `local.properties`
 3. Open in Android Studio
 4. Sync project with Gradle files
 5. Run on device or emulator
 
-### Using the Prompts Editor
-1. **Access Editor**: Tap "Edit Prompts" button in the main screen header
-2. **Browse Categories**: View all prompt categories in organized cards
-3. **Add Category**: Tap the "+" icon in the header to create new categories
-4. **Add Prompts**: Tap the "+" icon on any category card to add new prompts
-5. **Edit Prompts**: Tap the edit icon next to any prompt to modify it
-6. **Delete Prompts**: Tap the delete icon to remove prompts (with confirmation)
-7. **Auto-Save**: All changes are automatically saved and persist between app sessions
+### Using the Settings
+1. Access settings via the gear icon in the top bar
+2. Configure image processing options:
+   - Toggle "Downsize Images" for faster processing
+   - Choose Input Fidelity (Standard/High)
+   - Select Output Quality (Fast/Balanced/Best)
+3. Access prompt management through "Edit Predefined Prompts"
 
-### Permissions
-The app requires the following permissions:
-- `CAMERA` - For taking photos
-- `READ_EXTERNAL_STORAGE` - For gallery access (API < 33)
-- `READ_MEDIA_IMAGES` - For gallery access (API 33+)
-- `INTERNET` - For OpenAI API calls
-
-### Sharing Features
-The app includes comprehensive sharing capabilities:
-- **Native Share Sheet**: Tap the share button to open Android's share menu
-- **Multiple Apps**: Share to social media, messaging apps, email, cloud storage
-- **High Quality**: Shares full-resolution edited images in JPEG format
-- **FileProvider**: Secure file sharing using Android's FileProvider API
-- **Automatic Cleanup**: Temporary share files are managed efficiently
+### Using the Image Editor
+1. Select or capture an image
+2. Choose a prompt category and specific transformation
+3. Enter custom prompts or use predefined ones
+4. View real-time preview with horizontal pager
+5. Toggle fullscreen mode by tapping the image
+6. Use the floating action button to apply transformations
 
 ## Architecture
 
 ### MVVM Pattern
 - **MainViewModel**: Manages UI state and coordinates with OpenAI service
 - **OpenAIService**: Handles API communication with custom Retrofit implementation
-- **MainScreen**: Declarative UI with category-based prompt selection
-- **PromptsLoader**: JSON resource management with caching for prompt categories
-
-### Prompt Management System
-1. **Default JSON Resource**: Centralized `prompts.json` with 12 organized categories
-2. **Editable Storage**: SharedPreferences-based storage for user customizations
-3. **Data Migration**: Automatic conversion from static to editable format
-4. **Type Safety**: `PromptsData.Prompt` and `FlexiblePromptsData` structures
-5. **Caching**: Efficient loading and caching of prompt data
-6. **UI Integration**: Two-tier dropdown system (category → prompt selection)
-7. **Live Editing**: Real-time prompt editor with add/edit/delete capabilities
+- **Screen Components**: Modular UI with dedicated responsibility areas
+- **PromptsLoader**: JSON resource management with caching
 
 ### Image Processing Pipeline
 1. **Capture/Selection**: Camera or gallery image acquisition
 2. **Format Conversion**: ARGB_8888 bitmap creation for RGBA support
-3. **Resize & Optimize**: Half-size reduction with minimum 64x64 constraint
+3. **Resize & Optimize**: Optional downsizing based on settings
 4. **API Upload**: Multipart form data with PNG preservation
 5. **Response Handling**: Base64 to data URL conversion
-6. **Display**: Coil-based image rendering with fallback support
-7. **Share Processing**: JPEG conversion and FileProvider-based secure sharing
+6. **Display**: Coil-based image rendering with comparison view
+7. **Share Processing**: JPEG conversion and FileProvider-based sharing
 
 ### OpenAI Integration
 - **Model**: GPT-Image-1 for image editing capabilities
-- **API**: Custom Retrofit interface matching OpenAI specification
-- **Timeouts**: Configured for large image uploads (30s connect, 60s write, 120s read)
+- **API**: Custom Retrofit interface with optimized timeouts
 - **Format**: Base64 JSON response with PNG preservation
+- **Error Handling**: Comprehensive error management and retry logic
 
 ## Development Notes
 
-### Architecture Decisions
-- **Single Activity**: Uses Jetpack Compose with single Activity architecture
-- **Custom OpenAI Integration**: Built custom Retrofit service after library compatibility issues
-- **MVVM Pattern**: Clear separation of UI, business logic, and data layers
-- **Hybrid Prompt Storage**: JSON resources for defaults + SharedPreferences for user edits
-- **Navigation State**: Composable-based navigation without Navigation Component
-- **State Management**: Compose state with proper lifecycle handling
-- **Image Format**: RGBA PNG preservation throughout the processing pipeline
-- **Editable Prompts**: Map-based flexible data structure for unlimited customization
-
-### Known Issues & Solutions
-- **Data URL Display**: Implemented fallback temp file conversion for Coil compatibility
-- **API Timeouts**: Custom timeout configuration for large image uploads
-- **Memory Management**: Proper bitmap recycling and cleanup
-- **Experimental APIs**: Material 3 dropdown requires `@OptIn(ExperimentalMaterial3Api::class)`
-
 ### Performance Optimizations
-- **Image Resizing**: Half-size reduction before API upload
-- **Memory Efficiency**: Immediate bitmap recycling after use
-- **API Efficiency**: Direct byte array upload instead of temp files
-- **UI Responsiveness**: Coroutine-based async operations
-
-## Implemented Features ✅
-
-### Core Features
-- [x] Camera and gallery integration with permissions
-- [x] OpenAI GPT-Image-1 integration with custom API
-- [x] Category-based prompt organization (12 categories, 80+ prompts)
-- [x] Two-tier dropdown selection system
-- [x] Real-time image transformation with processing indicators
-- [x] Custom prompt input capability
-- [x] Image comparison (original vs transformed) with toggle
-- [x] Save to gallery functionality
-- [x] Share images using Android's native share sheet
-
-### UI/UX Features  
-- [x] Material Design 3 UI with ExperimentalMaterial3Api
-- [x] Fullscreen image viewer with tap-to-dismiss
-- [x] Processing spinner overlay during AI operations
-- [x] Comprehensive error handling and loading states
-- [x] Responsive design for various screen sizes
-- [x] Native Android share integration with comprehensive app support
-
-### **NEW! Prompts Editor Features**
-- [x] **Complete prompts editor interface** with card-based layout
-- [x] **Add new categories** with custom names
-- [x] **Add/edit/delete prompts** with real-time updates
-- [x] **Persistent storage** using SharedPreferences
-- [x] **Migration system** from static JSON to editable format
-- [x] **Reset to defaults** functionality
-- [x] **Navigation integration** with "Edit Prompts" button
-
-### Technical Features
-- [x] RGBA PNG format preservation
-- [x] Data URL and base64 handling
-- [x] Proper state management with Compose
-- [x] Memory-efficient bitmap handling
-- [x] Custom timeout configuration for API calls
-- [x] Flexible data structures for prompt management
-- [x] FileProvider-based secure file sharing
-- [x] Cross-app sharing integration
+- **Configurable Image Processing**: User-controlled quality vs. speed tradeoffs
+- **Screen Lock**: Prevents sleep during processing
+- **Memory Management**: Efficient bitmap handling and recycling
+- **Cached Prompts**: Fast loading of transformation options
 
 ### Future Enhancements
-- [ ] Prompt sharing and community features
-- [ ] Export/import custom prompt collections
-- [ ] Prompt templates and variables
-- [ ] Image history and transformation caching
-- [ ] Batch image processing capabilities
-- [ ] Advanced editing options (masks, variations, style transfer)
-- [ ] Enhanced sharing options (direct social media posting, cloud backup)
-- [ ] User preferences and favorites system
-- [ ] Offline mode with local ML models
-- [ ] Cloud storage integration and sync
-- [ ] Performance optimizations for large images
-- [ ] Multi-language prompt support
-- [ ] Advanced prompt validation and suggestions
+- [ ] Batch processing capabilities
+- [ ] Advanced mask-based editing
+- [ ] Cloud storage integration
+- [ ] Offline processing options
+- [ ] Multi-language support
+- [ ] Enhanced sharing options
+- [ ] User profiles and favorites
+- [ ] Community features
 
 ## Build & Run
 
