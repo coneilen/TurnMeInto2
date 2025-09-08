@@ -45,8 +45,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val availableCommands = listOf(
         CommandSuggestion("/share", "Share the current image"),
         CommandSuggestion("/save", "Save image to gallery"),
-        CommandSuggestion("/clear_prompts", "Clear prompts cache")
+        CommandSuggestion("/clear_prompts", "Clear prompts cache"),
+        CommandSuggestion("/help", "Show available commands")
     )
+
+    var showHelpDialog = mutableStateOf(false)
+        private set
 
     var showCommandSuggestions = mutableStateOf(false)
         private set
@@ -188,6 +192,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     fun updateCustomPrompt(prompt: String, category: String? = null, promptName: String? = null) {
         viewModelScope.launch {
+            // Check if the prompt is a command
+            if (prompt.startsWith("/")) {
+                handleChatCommand(getApplication(), prompt)
+                if (prompt == "/help") {
+                    // Clear the prompt field after showing help
+                    customPrompt.value = ""
+                    return@launch
+                }
+            }
+
             // Store the original values
             currentCategory = category
             currentPromptName = promptName
@@ -392,6 +406,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             "/clear_prompts" -> {
                 clearMultiPersonPromptsCache(context)
+            }
+            "/help" -> {
+                showHelpDialog.value = true
             }
         }
     }

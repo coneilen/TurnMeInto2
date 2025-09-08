@@ -549,5 +549,46 @@ fun EditScreen(
                 }
             }
         }
+
+        // Help Dialog
+        if (viewModel.showHelpDialog.value) {
+            AlertDialog(
+                onDismissRequest = { viewModel.showHelpDialog.value = false },
+                title = {
+                    Text(
+                        text = "Available Commands",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        viewModel.availableCommands.forEach { command ->
+                            Column {
+                                Text(
+                                    text = command.command,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    text = command.description,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.showHelpDialog.value = false }) {
+                        Text("Close")
+                    }
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

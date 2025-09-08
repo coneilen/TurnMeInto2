@@ -38,6 +38,7 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.shouldShowRationale
 import com.photoai.app.ui.viewmodel.MainViewModel
+import com.photoai.app.ui.viewmodel.CommandSuggestion
 import com.photoai.app.utils.createImageFile
 import com.photoai.app.utils.urlToBitmap
 import com.photoai.app.utils.PromptsLoader
@@ -49,6 +50,114 @@ import java.io.File
 import java.io.FileOutputStream
 import com.photoai.app.ui.theme.PastelPrimary
 import com.photoai.app.ui.theme.PastelSecondary
+
+@Composable
+private fun CommandsDropdownMenu(
+    commands: List<CommandSuggestion>,
+    onCommandSelected: (CommandSuggestion) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(
+                color = Color(0xFFFFFFFF).copy(alpha = 0.95f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .width(250.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            commands.forEach { command ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { 
+                            onCommandSelected(command)
+                            onDismiss()
+                        }
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = command.command,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF7FC7D9)
+                    )
+                    Text(
+                        text = command.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF8B7D6B)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun HelpDialog(
+    commands: List<CommandSuggestion>,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFFFFFFFF).copy(alpha = 0.95f),
+        title = {
+            Text(
+                text = "📚 Available Commands",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF8E7CC3)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                commands.forEach { command ->
+                    Column {
+                        Text(
+                            text = command.command,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF7FC7D9)
+                        )
+                        Text(
+                            text = command.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFF8B7D6B)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFC7EACD)
+                ),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Text(
+                    text = "👍 Got it!",
+                    color = Color(0xFF2D5016),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    )
+}
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -634,26 +743,85 @@ fun MainScreen(
                     
                     OutlinedTextField(
                         value = customPrompt,
-                        onValueChange = { viewModel.updateCustomPrompt(it, null, null) },
+                        onValueChange = { input ->
+                            if (input.startsWith("/")) {
+                                viewModel.handleChatCommand(context, input)
+                                if (input == "/help") {
+                                    viewModel.updateCustomPrompt("", null, null)
+                                } else {
+                                    viewModel.updateCustomPrompt(input, null, null)
+                                }
+                            } else {
+                                viewModel.updateCustomPrompt(input, null, null)
+                            }
+                        },
                         label = { Text("Enter your edit prompt (e.g., 'Turn this person into a dragon')") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                         maxLines = 4,
                         leadingIcon = if (customPrompt.isEmpty()) {
                             {
+                                var showCommands by remember { mutableStateOf(false) }
                                 Box(
-                                    modifier = Modifier
-                                        .padding(start = 12.dp)
-                                        .size(32.dp)
-                                        .background(PastelPrimary, CircleShape)
-                                        .clickable { viewModel.updateCustomPrompt("/", null, null) },
-                                    contentAlignment = Alignment.Center
+                                    modifier = Modifier.padding(start = 12.dp)
                                 ) {
-                                    Text(
-                                        text = "/",
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .background(PastelPrimary, CircleShape)
+                                            .clickable { showCommands = true },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "/",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
+
+                                    if (showCommands) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(top = 40.dp)
+                                                .width(300.dp)
+                                                .background(
+                                                    color = Color(0xFFFFFFFF),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                .padding(8.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.verticalScroll(rememberScrollState()),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                viewModel.availableCommands.forEach { command ->
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable {
+                                                                showCommands = false
+                                                                viewModel.handleChatCommand(context, command.command)
+                                                            }
+                                                            .padding(8.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = command.command,
+                                                            style = MaterialTheme.typography.titleMedium,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = Color(0xFF7FC7D9)
+                                                        )
+                                                        Text(
+                                                            text = command.description,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = Color(0xFF8B7D6B)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } else null,
@@ -919,6 +1087,16 @@ fun MainScreen(
                 }
             }
         }
+    }
+    
+    // Show help dialog when needed
+    // Show help dialog when needed
+    if (viewModel.showHelpDialog.value) {
+        HelpDialog(
+            commands = viewModel.availableCommands,
+            onDismiss = { viewModel.showHelpDialog.value = false },
+            modifier = Modifier
+        )
     }
     
     // Open fullscreen mode when needed
