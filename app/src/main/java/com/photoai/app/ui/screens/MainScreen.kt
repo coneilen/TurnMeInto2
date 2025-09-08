@@ -41,6 +41,7 @@ import com.photoai.app.ui.viewmodel.MainViewModel
 import com.photoai.app.utils.createImageFile
 import com.photoai.app.utils.urlToBitmap
 import com.photoai.app.utils.PromptsLoader
+import com.photoai.app.data.PromptCategory
 import kotlinx.coroutines.launch
 import android.content.Intent
 import android.graphics.Bitmap
@@ -101,7 +102,11 @@ fun MainScreen(
     )
     
     // Load category names from JSON resource
-    val categoryNames = remember { PromptsLoader.getCategoryNames(context) }
+    var categoryNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    
+    LaunchedEffect(Unit) {
+        categoryNames = PromptsLoader.getCategoryNames(context)
+    }
     
     // Share function
     fun shareEditedImage() {
@@ -563,13 +568,16 @@ fun MainScreen(
                     )
                     
                     // Get prompts for the selected category
-                    val categoryPrompts = remember(selectedCategory) {
-                        if (selectedCategory != "Select a category...") {
-                            PromptsLoader.getPromptsForCategory(context, selectedCategory)
-                        } else {
-                            emptyList()
-                        }
-                    }
+    var categoryPrompts by remember { mutableStateOf<List<PromptCategory>>(emptyList()) }
+
+    // Load prompts for selected category
+    LaunchedEffect(selectedCategory) {
+        categoryPrompts = if (selectedCategory != "Select a category...") {
+            PromptsLoader.getPromptsForCategory(context, selectedCategory)
+        } else {
+            emptyList()
+        }
+    }
                     
                     // Dropdown for prompts in selected category
                     ExposedDropdownMenuBox(
@@ -600,7 +608,11 @@ fun MainScreen(
                                         selectedPrompt = promptCategory.name
                                         expandedDropdown = false
                                         // Set the custom prompt text instead of immediately running the AI
-                                        viewModel.updateCustomPrompt(promptCategory.prompt)
+                                        viewModel.updateCustomPrompt(
+                                            prompt = promptCategory.prompt,
+                                            category = selectedCategory,
+                                            promptName = promptCategory.name
+                                        )
                                     },
                                     enabled = !isProcessing && selectedImageUri != null
                                 )
@@ -620,7 +632,7 @@ fun MainScreen(
                     
                     OutlinedTextField(
                         value = customPrompt,
-                        onValueChange = { viewModel.updateCustomPrompt(it) },
+                        onValueChange = { viewModel.updateCustomPrompt(it, null, null) },
                         label = { Text("Enter your edit prompt (e.g., 'Turn this person into a dragon')") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,

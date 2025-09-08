@@ -5,6 +5,9 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -31,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.photoai.app.utils.PromptsLoader
+import com.photoai.app.data.PromptCategory
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -58,10 +63,18 @@ fun EditScreen(
     }
     
     var selectedCategory by remember { mutableStateOf("art") }
-    val categoryPrompts = remember(selectedCategory) {
-        PromptsLoader.getPromptsForCategory(context, selectedCategory)
+    var categoryPrompts by remember { mutableStateOf<List<PromptCategory>>(emptyList()) }
+    var categoryNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Track current prompt name to maintain context when editing
+    var currentPromptName by remember { mutableStateOf<String?>(null) }
+
+    // Load categories and prompts
+    LaunchedEffect(selectedCategory) {
+        categoryPrompts = PromptsLoader.getPromptsForCategory(context, selectedCategory)
     }
-    val categoryNames = remember { PromptsLoader.getCategoryNames(context) }
+    LaunchedEffect(Unit) {
+        categoryNames = PromptsLoader.getCategoryNames(context)
+    }
     
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -108,7 +121,6 @@ fun EditScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                // Rest of the content...
                 // Top Bar
                 Row(
                     modifier = Modifier
@@ -133,7 +145,8 @@ fun EditScreen(
                         )
                     }
                 }
-                
+
+
                 // Image Preview with Pager (70% of remaining height)
                 val pagerState = rememberPagerState(
                     pageCount = { if (viewModel.editedImageUrl.value != null) 2 else 1 }
@@ -205,6 +218,42 @@ fun EditScreen(
                                 }
                             }
                             
+                            // Loading overlay (person counting or prompt generation)
+                            if (viewModel.isLoadingPersonCount.value || viewModel.isGeneratingPrompts.value) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.7f))
+                                        .animateContentSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Card(
+                                        modifier = Modifier.padding(32.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(24.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                                        ) {
+                                            CircularProgressIndicator(
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(48.dp),
+                                                strokeWidth = 4.dp
+                                            )
+                                            Text(
+                                                text = viewModel.loadingMessage.value ?: "Processing...",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             // Processing overlay
                             if (viewModel.isProcessing.value) {
                                 Box(
@@ -301,7 +350,14 @@ fun EditScreen(
                         items(categoryPrompts) { prompt ->
                             ElevatedFilterChip(
                                 selected = viewModel.customPrompt.value == prompt.prompt,
-                                onClick = { viewModel.updateCustomPrompt(prompt.prompt) },
+                                onClick = { 
+                                    currentPromptName = prompt.name
+                                    viewModel.updateCustomPrompt(
+                                        prompt = prompt.prompt,
+                                        category = selectedCategory.lowercase(),
+                                        promptName = prompt.name
+                                    )
+                                },
                                 label = { 
                                     Text(
                                         text = prompt.name,
@@ -330,14 +386,19 @@ fun EditScreen(
                             value = viewModel.customPrompt.value,
                             onValueChange = { prompt ->
                                 if (prompt.startsWith("/")) {
-                                    if (prompt in listOf("/share", "/save")) {
+                                    if (prompt in viewModel.availableCommands.map { it.command }) {
                                         viewModel.handleChatCommand(context, prompt)
                                         viewModel.updateCustomPrompt("")
+                                        currentPromptName = null
                                     } else {
-                                        viewModel.updateCustomPrompt(prompt)
+                                        viewModel.showCommandSuggestions.value = true
+                                        viewModel.updateCustomPrompt(prompt, null, null)
+                                        currentPromptName = null
                                     }
                                 } else {
-                                    viewModel.updateCustomPrompt(prompt)
+                                    viewModel.showCommandSuggestions.value = false
+                                    // Maintain category and promptName context when manually editing
+                                    viewModel.updateCustomPrompt(prompt, selectedCategory.lowercase(), currentPromptName)
                                 }
                             },
                             modifier = Modifier.weight(1f),
@@ -350,8 +411,52 @@ fun EditScreen(
                                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                                 unfocusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                             ),
-                            textStyle = MaterialTheme.typography.bodyMedium
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            trailingIcon = {
+                                if (viewModel.customPrompt.value.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.updateCustomPrompt("")
+                                            currentPromptName = null
+                                        },
+                                        enabled = !viewModel.isProcessing.value
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Clear,
+                                            contentDescription = "Clear text",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            }
                         )
+
+                        // Command Suggestions
+                        AnimatedVisibility(
+                            visible = viewModel.showCommandSuggestions.value,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                contentPadding = PaddingValues(vertical = 4.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(viewModel.availableCommands) { suggestion ->
+                                    SuggestionChip(
+                                        onClick = {
+                                            viewModel.handleChatCommand(context, suggestion.command)
+                                            viewModel.updateCustomPrompt("")
+                                            currentPromptName = null
+                                            viewModel.showCommandSuggestions.value = false
+                                        },
+                                        label = { Text(suggestion.command) },
+                                        modifier = Modifier.animateContentSize()
+                                    )
+                                }
+                            }
+                        }
+
                         FloatingActionButton(
                             onClick = {
                                 if (viewModel.customPrompt.value.isNotBlank() && !viewModel.isProcessing.value) {

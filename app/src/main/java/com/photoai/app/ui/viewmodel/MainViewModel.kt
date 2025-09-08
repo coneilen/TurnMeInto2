@@ -24,6 +24,12 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
+// Available chat commands with descriptions
+data class CommandSuggestion(
+    val command: String,
+    val description: String
+)
+
 sealed class Screen {
     object Landing : Screen()
     data class Edit(val imageUri: Uri) : Screen()
@@ -35,7 +41,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val openAIService = OpenAIService.getInstance()
     private var wakeLock: PowerManager.WakeLock? = null
 
+    // List of available commands
+    val availableCommands = listOf(
+        CommandSuggestion("/share", "Share the current image"),
+        CommandSuggestion("/save", "Save image to gallery"),
+        CommandSuggestion("/clear_prompts", "Clear prompts cache")
+    )
+
+    var showCommandSuggestions = mutableStateOf(false)
+        private set
+    
     var currentScreen = mutableStateOf<Screen>(Screen.Landing)
+        private set
+        
+    var personCount = mutableStateOf<Int?>(null)
+        private set
+        
+    var isLoadingPersonCount = mutableStateOf(false)
+        private set
+    
+    var loadingMessage = mutableStateOf<String?>(null)
+        private set
+        
+    var isGeneratingPrompts = mutableStateOf(false)
+        private set
+        
+    var personCountError = mutableStateOf<String?>(null)
         private set
 
     var selectedImageUri = mutableStateOf<Uri?>(null)
@@ -43,6 +74,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     var customPrompt = mutableStateOf("")
         private set
+    
+    // Track the currently selected category and prompt name
+    private var currentCategory: String? = null
+    private var currentPromptName: String? = null
     
     var editedImageUrl = mutableStateOf<String?>(null)
         private set
@@ -78,9 +113,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         errorMessage.value = null
         currentPage.value = 0
         saveMessage.value = null
+        personCount.value = null
+        personCountError.value = null
         
         uri?.let {
             currentScreen.value = Screen.Edit(it)
+            detectPersonCount(it)
+        }
+    }
+    
+    private fun detectPersonCount(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                isLoadingPersonCount.value = true
+                loadingMessage.value = "Processing input image"
+                personCountError.value = null
+                
+                val result = openAIService.detectPersons(getApplication(), uri)
+                
+                result.fold(
+                    onSuccess = { count ->
+                        personCount.value = count
+                        personCountError.value = null
+                        // Update loading message while generating prompts
+                        if (count > 1) {
+                            loadingMessage.value = "Generating multi-person prompts"
+                        }
+                    },
+                    onFailure = { error ->
+                        personCountError.value = error.message ?: "Failed to detect persons in image"
+                        personCount.value = null
+                    }
+                )
+                
+                // If multiple people detected, ensure multi-person prompts are generated
+                if (personCount.value != null && personCount.value!! > 1) {
+                    try {
+                        // Load prompts to trigger multi-person prompt generation
+                        PromptsLoader.loadPrompts(getApplication())
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "Failed to generate multi-person prompts: ${e.message}")
+                    }
+                }
+                
+            } catch (e: Exception) {
+                personCountError.value = e.message ?: "An unexpected error occurred"
+                personCount.value = null
+            } finally {
+                isLoadingPersonCount.value = false
+                loadingMessage.value = null
+            }
         }
     }
 
@@ -104,8 +186,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentScreen.value = Screen.PromptsEditor
     }
     
-    fun updateCustomPrompt(prompt: String) {
-        customPrompt.value = prompt
+    fun updateCustomPrompt(prompt: String, category: String? = null, promptName: String? = null) {
+        viewModelScope.launch {
+            // Store the original values
+            currentCategory = category
+            currentPromptName = promptName
+
+            // Check if we need to use multi-person prompt
+            if (personCount.value != null && personCount.value!! > 1 && category != null && promptName != null) {
+                android.util.Log.d("MainViewModel", "Multiple people detected, getting multi-person prompt")
+                try {
+                    // Ensure prompts are loaded
+                    PromptsLoader.loadPrompts(getApplication())
+                    
+                    // Get multi-person prompt if available
+                    val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(category, promptName)
+                    if (multiPersonPrompt != null) {
+                        android.util.Log.d("MainViewModel", "Using multi-person prompt: ${multiPersonPrompt.take(50)}...")
+                        customPrompt.value = multiPersonPrompt
+                    } else {
+                        android.util.Log.d("MainViewModel", "Multi-person prompt not available, using original")
+                        customPrompt.value = prompt
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainViewModel", "Error getting multi-person prompt: ${e.message}")
+                    customPrompt.value = prompt
+                }
+            } else {
+                android.util.Log.d("MainViewModel", "Using original prompt")
+                customPrompt.value = prompt
+            }
+            
+            android.util.Log.d("MainViewModel", "Updated custom prompt. Category: $category, Prompt name: $promptName, Using multi-person: ${personCount.value != null && personCount.value!! > 1}")
+        }
+    }
+    
+    private suspend fun getAppropriatePrompt(context: Context, prompt: String): String {
+        android.util.Log.d("MainViewModel", "Getting appropriate prompt. Person count: ${personCount.value}, Category: $currentCategory, Prompt name: $currentPromptName")
+        
+        // Get base prompt first
+        val basePrompt = PromptsLoader.getBasePrompt(context)
+        
+        // If no category or prompt name, return base prompt + original prompt
+        if (currentCategory == null || currentPromptName == null) {
+            android.util.Log.d("MainViewModel", "No category or prompt name available, using original prompt")
+            return basePrompt + prompt
+        }
+
+        // Get multi-person prompt if needed
+        val shouldUseMultiPersonPrompt = personCount.value != null && personCount.value!! > 1
+        if (shouldUseMultiPersonPrompt) {
+            android.util.Log.d("MainViewModel", "Multiple people detected, attempting to get multi-person prompt")
+            try {
+                // First ensure prompts are loaded and multi-person prompts are generated
+                isGeneratingPrompts.value = true
+                loadingMessage.value = "Generating prompts"
+                
+                try {
+                    PromptsLoader.loadPrompts(context)
+                    
+                    // After prompts are loaded, check for multi-person version
+                    val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(currentCategory!!, currentPromptName!!)
+                    if (multiPersonPrompt != null) {
+                        android.util.Log.d("MainViewModel", "Successfully found multi-person prompt")
+                        return basePrompt + multiPersonPrompt
+                    } else {
+                        android.util.Log.e("MainViewModel", "Failed to get multi-person prompt despite multiple people")
+                    }
+                } finally {
+                    isGeneratingPrompts.value = false
+                    loadingMessage.value = null
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Error getting multi-person prompt: ${e.message}")
+            }
+        }
+        
+        android.util.Log.d("MainViewModel", "Using original prompt as fallback")
+        return basePrompt + prompt
     }
     
     fun setDownsizeImages(context: Context, downsize: Boolean) {
@@ -127,6 +285,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         downsizeImages.value = PromptsLoader.getDownsizeImages(context)
         inputFidelity.value = PromptsLoader.getInputFidelity(context)
         quality.value = PromptsLoader.getQuality(context)
+    }
+    
+    /**
+     * Clear the multi-person prompts cache to force regeneration
+     */
+    fun clearMultiPersonPromptsCache(context: Context) {
+        viewModelScope.launch {
+            try {
+                isGeneratingPrompts.value = true
+                loadingMessage.value = "Generating prompts"
+                
+                // Clear cache and reset state
+                PromptsLoader.clearMultiPersonPrompts(context)
+                customPrompt.value = ""  // Reset prompt selection
+                currentCategory = null
+                currentPromptName = null
+                
+                // Force regeneration of multi-person prompts
+                android.util.Log.d("MainViewModel", "Regenerating prompts...")
+                val prompts = PromptsLoader.loadPrompts(context)
+                android.util.Log.d("MainViewModel", "Loaded ${prompts.prompts.size} categories")
+                
+                // Reprocess current image if one is selected
+                android.util.Log.d("MainViewModel", "Reprocessing current image...")
+                selectedImageUri.value?.let { 
+                    detectPersonCount(it)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Failed to regenerate prompts: ${e.message}")
+                errorMessage.value = "Failed to regenerate prompts: ${e.message}"
+            } finally {
+                isGeneratingPrompts.value = false
+                loadingMessage.value = null
+            }
+        }
     }
     
     private fun acquireWakeLock(context: Context) {
@@ -197,6 +390,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+            "/clear_prompts" -> {
+                clearMultiPersonPromptsCache(context)
+            }
         }
     }
     
@@ -217,10 +413,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Acquire wake lock to prevent screen from sleeping
                 acquireWakeLock(context)
                 
+                // Get the appropriate prompt (includes base prompt)
+                val fullPrompt = if (isEditingEditedImage) {
+                    prompt // Use original prompt when editing an already edited image
+                } else {
+                    getAppropriatePrompt(context, prompt)
+                }
+                
                 val result = openAIService.editImage(
                     context = context,
                     uri = uri,
-                    prompt = prompt,
+                    prompt = fullPrompt,
                     downsizeImage = downsizeImages.value,
                     inputFidelity = inputFidelity.value,
                     quality = quality.value,

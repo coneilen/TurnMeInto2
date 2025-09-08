@@ -27,7 +27,9 @@ data class PromptsData(
     // New simplified prompt data class for editing
     data class Prompt(
         val name: String,
-        val prompt: String
+        val prompt: String,
+        val multiPersonPrompt: String? = null,
+        val lastGeneratedTimestamp: Long? = null
     )
     
     fun getAllPrompts(): List<Pair<String, PromptCategory>> {

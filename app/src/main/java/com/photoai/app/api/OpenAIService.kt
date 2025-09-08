@@ -18,6 +18,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
@@ -28,6 +29,55 @@ import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 // Data classes for OpenAI API responses
+data class VisionResponse(
+    @SerializedName("created") val created: Long,
+    @SerializedName("choices") val choices: List<Choice>
+)
+
+data class Choice(
+    @SerializedName("message") val message: Message,
+    @SerializedName("index") val index: Int
+)
+
+data class Message(
+    @SerializedName("role") val role: String,
+    @SerializedName("content") val content: String
+)
+
+data class ChatRequest(
+    @SerializedName("model") val model: String = "gpt-4",
+    @SerializedName("messages") val messages: List<ChatMessage>,
+    @SerializedName("max_tokens") val maxTokens: Int = 300,
+    @SerializedName("temperature") val temperature: Double = 0.7
+)
+
+data class ForegroundPeopleCount(
+    @SerializedName("foreground_people_count") val foregroundPeopleCount: Int,
+    @SerializedName("reason") val reason: String? = null
+)
+
+data class VisionRequest(
+    @SerializedName("model") val model: String = "gpt-4o",
+    @SerializedName("messages") val messages: List<VisionMessage>,
+    @SerializedName("max_tokens") val maxTokens: Int = 300
+)
+
+data class VisionMessage(
+    @SerializedName("role") val role: String,
+    @SerializedName("content") val content: List<VisionContent>
+)
+
+data class VisionContent(
+    @SerializedName("type") val type: String,
+    @SerializedName("text") val text: String? = null,
+    @SerializedName("image_url") val imageUrl: Map<String, String>? = null
+)
+
+data class ChatMessage(
+    @SerializedName("role") val role: String,
+    @SerializedName("content") val content: String
+)
+
 data class ImageEditResponse(
     @SerializedName("created") val created: Long,
     @SerializedName("data") val data: List<ImageData>
@@ -41,6 +91,18 @@ data class ImageData(
 
 // Retrofit interface for OpenAI API
 interface OpenAIApi {
+    @POST("v1/chat/completions")
+    suspend fun generateChatCompletion(
+        @Header("Authorization") authorization: String,
+        @Body request: ChatRequest
+    ): Response<VisionResponse>
+
+    @POST("v1/chat/completions")
+    suspend fun detectPersons(
+        @Header("Authorization") authorization: String,
+        @Body request: VisionRequest
+    ): Response<VisionResponse>
+
     /**
      * Creates an edited or extended image given an original image and a prompt.
      * 
@@ -75,6 +137,88 @@ interface OpenAIApi {
 }
 
 class OpenAIService {
+    suspend fun generateMultiPersonPrompt(prompt: String): Result<String> {
+        android.util.Log.d("OpenAIService", "Generating multi-person prompt for: $prompt")
+        return try {
+            if (BuildConfig.OPENAI_API_KEY.isBlank()) {
+                return Result.failure(Exception("OpenAI API key not configured"))
+            }
+
+            // Check cache first
+            val cached = promptGenerationCache[prompt]
+            val now = System.currentTimeMillis()
+
+            if (cached != null && (now - cached.second) < CACHE_EXPIRY_MS) {
+                android.util.Log.d("OpenAIService", "Using cached multi-person prompt: ${cached.first.take(50)}...")
+                return Result.success(cached.first)
+            }
+            android.util.Log.d("OpenAIService", "Cache miss, generating new prompt")
+
+            val request = ChatRequest(
+                model = "gpt-4",
+                messages = listOf(
+                    ChatMessage(
+                        role = "system",
+                        content = MULTI_PERSON_SYSTEM_PROMPT
+                    ),
+                    ChatMessage(
+                        role = "user",
+                        content = prompt
+                    )
+                )
+            )
+
+            val response = api.generateChatCompletion(
+                authorization = "Bearer ${BuildConfig.OPENAI_API_KEY}",
+                request = request
+            )
+
+            if (response.isSuccessful) {
+                val multiPersonPrompt = response.body()?.choices?.firstOrNull()?.message?.content
+                    ?: throw Exception("Invalid response format")
+                
+                android.util.Log.d("OpenAIService", "Generated prompt: ${multiPersonPrompt.take(50)}...")
+
+                // Cache the result
+                synchronized(promptGenerationCache) {
+                    promptGenerationCache[prompt] = Pair(multiPersonPrompt, now)
+                }
+                android.util.Log.d("OpenAIService", "Successfully generated and cached multi-person prompt")
+                Result.success(multiPersonPrompt)
+            } else {
+                val errorBody = response.errorBody()?.string() ?: "Unknown error"
+                android.util.Log.e("OpenAIService", "API Error: ${response.code()} ${response.message()} - $errorBody")
+                Result.failure(Exception("Failed to generate multi-person prompt: $errorBody"))
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OpenAIService", "Error generating multi-person prompt", e)
+            Result.failure(e)
+        }
+    }
+
+    private val personCountCache = mutableMapOf<String, Pair<Int, Long>>()
+    private val promptGenerationCache = mutableMapOf<String, Pair<String, Long>>()
+    private val CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000L // 24 hours
+
+    // System prompt for generating multi-person prompts
+    private val MULTI_PERSON_SYSTEM_PROMPT = """
+        Convert the given prompt to work with multiple people. Rules:
+        1. Change singular references to plural (e.g., "this person" -> "these people", "them" -> "them all", "their" -> "their")
+        2. Keep the same style and artistic intent but adapt it for multiple subjects
+        3. Ensure all references to appearance, features, and characteristics apply to everyone
+        4. Preserve specific theme instructions (movie/TV characters, art styles, etc.)
+        5. Return ONLY the converted prompt, no explanations
+        Examples:
+        Input: "Make this person look like a sports team mascot, exaggerated, like a full-on cartoon mascot with a giant head and foam costume"
+        Output: "Make these people look like sports team mascots, exaggerated, like full-on cartoon mascots with giant heads and foam costumes"
+        
+        Input: "Transform them into a glowing neon cyberpunk character with vibrant colors"
+        Output: "Transform them all into glowing neon cyberpunk characters with vibrant colors"
+        
+        Input: "Make them look like an oil painting in the style of Rembrandt"
+        Output: "Make them all look like they're in an oil painting in the style of Rembrandt"
+    """.trimIndent()
+
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
@@ -283,6 +427,87 @@ class OpenAIService {
                     android.util.Log.e("OpenAIService", "API Error: ${response.code()} ${response.message()}")
                     android.util.Log.e("OpenAIService", "Error body: $errorBody")
                     Result.failure(Exception("API call failed: ${response.code()} ${response.message()}. Error: $errorBody"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    private fun convertBitmapToBase64(bitmap: Bitmap): String {
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+        val bytes = outputStream.toByteArray()
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.DEFAULT)
+    }
+
+    suspend fun detectPersons(context: Context, uri: Uri): Result<Int> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Check cache first
+                val key = uri.toString()
+                val cached = personCountCache[key]
+                val now = System.currentTimeMillis()
+
+                if (cached != null && (now - cached.second) < CACHE_EXPIRY_MS) {
+                    return@withContext Result.success(cached.first)
+                }
+
+                if (BuildConfig.OPENAI_API_KEY.isBlank()) {
+                    return@withContext Result.failure(Exception("OpenAI API key not configured"))
+                }
+
+                // Load image and resize
+                val originalBitmap = uriToBitmapWithCorrectOrientation(context, uri)
+                    ?: return@withContext Result.failure(Exception("Unable to load image"))
+                
+                // Resize the bitmap to reduce upload size
+                val resizedBitmap = resizeBitmapToHalf(originalBitmap)
+                originalBitmap.recycle()
+
+                // Convert to base64 and cleanup
+                val base64Image = convertBitmapToBase64(resizedBitmap)
+                resizedBitmap.recycle()
+
+                val request = VisionRequest(
+                    model = "gpt-4o",
+                    messages = listOf(
+                        VisionMessage(
+                            role = "user",
+                            content = listOf(
+                                VisionContent(
+                                    type = "text",
+                                    text = "Count how many people are prominently in the foreground. A person is in the foreground if they are in focus and occupy a substantial portion of the frame (roughly upper-body size or larger), clearly closer than background patrons. Ignore reflections, posters, and partial silhouettes. Respond with ONLY a single number."
+                                ),
+                                VisionContent(
+                                    type = "image_url",
+                                    imageUrl = mapOf("url" to "data:image/jpeg;base64,$base64Image")
+                                )
+                            )
+                        )
+                    ),
+                    maxTokens = 50
+                )
+
+                val response = api.detectPersons(
+                    authorization = "Bearer ${BuildConfig.OPENAI_API_KEY}",
+                    request = request
+                )
+
+                if (response.isSuccessful) {
+                    val content = response.body()?.choices?.firstOrNull()?.message?.content
+                        ?: throw Exception("Invalid response format")
+                    
+                    // Extract the number from the response
+                    val number = content.trim().toIntOrNull()
+                        ?: throw Exception("Failed to parse person count from response: $content")
+
+                    // Cache the result
+                    personCountCache[key] = Pair(number, now)
+                    Result.success(number)
+                } else {
+                    android.util.Log.e("OpenAIService", "API Error: ${response.code()} ${response.message()} - ${response.errorBody()?.string()}")
+                    Result.failure(Exception("API call failed: ${response.code()} ${response.message()}"))
                 }
             } catch (e: Exception) {
                 Result.failure(e)
