@@ -47,6 +47,7 @@ fun LandingScreen(
         contract = ActivityResultContracts.TakePicture(),
         onResult = { success ->
             if (success && photoUri != null) {
+                android.util.Log.d("LandingScreen", "Camera image captured: $photoUri")
                 onImageSelected(photoUri)
             }
         }
@@ -56,6 +57,7 @@ fun LandingScreen(
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri -> 
+            android.util.Log.d("LandingScreen", "Gallery image selected: $uri")
             onImageSelected(uri)
         }
     )

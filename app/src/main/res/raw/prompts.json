@@ -74,7 +74,7 @@
     ],
     "ghost_monster": [
         { "name": "Photorealistic Ghost", "prompt": "Make this person look like a photorealistic ghost, keep color and lighting the same." },
-        { "name": "Frankenstein", "prompt": "Turn this person into Frankenstein, keeping their facial features and any spectacles they are wearing. Their should be bolts through the neck." }
+        { "name": "Frankenstein", "prompt": "Turn this person into Frankenstein, keeping their facial features and any spectacles they are wearing. There should be bolts through the neck." }
     ],
     "sports": [
         { "name": "Liverpool Soccer Player", "prompt": "Can you make this person look like they play soccer for Liverpool." },

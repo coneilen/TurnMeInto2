@@ -118,7 +118,8 @@ class OpenAIService {
         prompt: String, 
         downsizeImage: Boolean = true,
         inputFidelity: String = "low", // "low" or "high"
-        quality: String = "low" // "low", "medium", or "high"
+        quality: String = "low", // "low", "medium", or "high"
+        isEditingEditedImage: Boolean = false
     ): Result<String> {
         return withContext(Dispatchers.IO) {
             try {
@@ -209,9 +210,13 @@ class OpenAIService {
                 val imageRequestBody = pngByteArray.toRequestBody("image/png".toMediaType())
                 val imagePart = MultipartBody.Part.createFormData("image", "image.png", imageRequestBody)
                 
-                // Get editable base prompt from PromptsLoader
-                val basePrompt = PromptsLoader.getBasePrompt(context)
-                val fullPrompt = basePrompt + prompt
+                // Get editable base prompt from PromptsLoader only if not editing an edited image
+                val fullPrompt = if (isEditingEditedImage) {
+                    prompt  // Use just the prompt without base prompt for edited images
+                } else {
+                    val basePrompt = PromptsLoader.getBasePrompt(context)
+                    basePrompt + prompt  // Use base prompt + user prompt for original image
+                }
                 
                 val promptBody = fullPrompt.toRequestBody("text/plain".toMediaType())
                 // Note: Using "gpt-image-1" as specified. Standard OpenAI image editing typically uses "dall-e-2"

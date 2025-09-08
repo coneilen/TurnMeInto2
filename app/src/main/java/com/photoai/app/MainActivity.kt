@@ -1,6 +1,5 @@
 package com.photoai.app
 
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,7 +9,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import com.photoai.app.ui.screens.*
+import com.photoai.app.ui.screens.EditScreen
+import com.photoai.app.ui.screens.LandingScreen
+import com.photoai.app.ui.screens.PromptsEditorScreen
+import com.photoai.app.ui.screens.SettingsScreen
 import com.photoai.app.ui.theme.PhotoAITheme
 import com.photoai.app.ui.viewmodel.MainViewModel
 import com.photoai.app.ui.viewmodel.Screen
@@ -28,16 +30,6 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
 
-                    // Monitor editedImageUrl and navigate to Result screen when it becomes available
-                    LaunchedEffect(viewModel.editedImageUrl.value) {
-                        viewModel.editedImageUrl.value?.let { editedUrl ->
-                            if (viewModel.currentScreen.value is Screen.Edit) {
-                                val imageUri = (viewModel.currentScreen.value as Screen.Edit).imageUri
-                                viewModel.currentScreen.value = Screen.Result(imageUri, editedUrl)
-                            }
-                        }
-                    }
-                    
                     when (val screen = viewModel.currentScreen.value) {
                         is Screen.Landing -> {
                             LandingScreen(
@@ -52,15 +44,6 @@ class MainActivity : ComponentActivity() {
                                 onSettingsClick = { viewModel.navigateToSettings() },
                                 onBackClick = { viewModel.navigateBack() },
                                 viewModel = viewModel
-                            )
-                        }
-                        is Screen.Result -> {
-                            ResultScreen(
-                                originalImageUri = screen.originalUri,
-                                editedImageUrl = screen.editedUrl,
-                                onBackClick = { viewModel.navigateBack() },
-                                onSave = { bitmap -> viewModel.saveEditedImage(this, bitmap) },
-                                onShare = { viewModel.shareEditedImage() }
                             )
                         }
                         is Screen.Settings -> {

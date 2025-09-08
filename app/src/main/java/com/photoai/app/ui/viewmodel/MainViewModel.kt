@@ -27,7 +27,6 @@ import java.io.IOException
 sealed class Screen {
     object Landing : Screen()
     data class Edit(val imageUri: Uri) : Screen()
-    data class Result(val originalUri: Uri, val editedUrl: String) : Screen()
     object Settings : Screen()
     object PromptsEditor : Screen()
 }
@@ -54,7 +53,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var errorMessage = mutableStateOf<String?>(null)
         private set
     
-    var showOriginal = mutableStateOf(true)
+    var currentPage = mutableStateOf(0)
+        private set
+        
+    var isFullScreenMode = mutableStateOf(false)
         private set
     
     var saveMessage = mutableStateOf<String?>(null)
@@ -74,7 +76,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Clear previous results when new image is selected
         editedImageUrl.value = null
         errorMessage.value = null
-        showOriginal.value = true
+        currentPage.value = 0
         saveMessage.value = null
         
         uri?.let {
@@ -89,7 +91,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateBack() {
         currentScreen.value = when (currentScreen.value) {
             is Screen.Edit -> Screen.Landing
-            is Screen.Result -> Screen.Edit((currentScreen.value as Screen.Result).originalUri)
             is Screen.Settings -> {
                 if (selectedImageUri.value != null) Screen.Edit(selectedImageUri.value!!)
                 else Screen.Landing
@@ -156,13 +157,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    fun toggleImageView() {
-        if (editedImageUrl.value != null) {
-            showOriginal.value = !showOriginal.value
+    fun setCurrentPage(page: Int) {
+        currentPage.value = page
+    }
+    
+    fun toggleFullScreenMode() {
+        isFullScreenMode.value = !isFullScreenMode.value
+    }
+    
+    fun handleChatCommand(context: Context, command: String) {
+        when (command.lowercase()) {
+            "/share" -> {
+                viewModelScope.launch {
+                    if (currentPage.value == 0) {
+                        selectedImageUri.value?.let { uri ->
+                            val bitmap = urlToBitmap(uri.toString())
+                            bitmap?.let { shareImage(it) }
+                        }
+                    } else {
+                        editedImageUrl.value?.let { url ->
+                            val bitmap = urlToBitmap(url)
+                            bitmap?.let { shareImage(it) }
+                        }
+                    }
+                }
+            }
+            "/save" -> {
+                viewModelScope.launch {
+                    if (currentPage.value == 0) {
+                        selectedImageUri.value?.let { uri ->
+                            val bitmap = urlToBitmap(uri.toString())
+                            bitmap?.let { saveEditedImage(context, it) }
+                        }
+                    } else {
+                        editedImageUrl.value?.let { url ->
+                            val bitmap = urlToBitmap(url)
+                            bitmap?.let { saveEditedImage(context, it) }
+                        }
+                    }
+                }
+            }
         }
     }
     
-    fun editImage(context: Context, uri: Uri, prompt: String) {
+    fun getCurrentImageUri(): Uri? {
+        return if (currentPage.value == 0) {
+            selectedImageUri.value
+        } else {
+            editedImageUrl.value?.let { Uri.parse(it) }
+        }
+    }
+    
+    fun editImage(context: Context, uri: Uri, prompt: String, isEditingEditedImage: Boolean = false) {
         viewModelScope.launch {
             try {
                 isProcessing.value = true
@@ -171,7 +217,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Acquire wake lock to prevent screen from sleeping
                 acquireWakeLock(context)
                 
-                val result = openAIService.editImage(context, uri, prompt, downsizeImages.value, inputFidelity.value, quality.value)
+                val result = openAIService.editImage(
+                    context = context,
+                    uri = uri,
+                    prompt = prompt,
+                    downsizeImage = downsizeImages.value,
+                    inputFidelity = inputFidelity.value,
+                    quality = quality.value,
+                    isEditingEditedImage = isEditingEditedImage
+                )
                 
                 result.fold(
                     onSuccess = { imageUrl ->
@@ -182,11 +236,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             viewModelScope.launch {
                                 val tempFileUri = convertDataUrlToTempFile(context, imageUrl)
                                 editedImageUrl.value = tempFileUri?.toString() ?: imageUrl
-                                showOriginal.value = false // Show edited image when ready
+                                currentPage.value = 1 // Show edited image when ready
                             }
                         } else {
                             editedImageUrl.value = imageUrl
-                            showOriginal.value = false // Show edited image when ready
+                            currentPage.value = 1 // Show edited image when ready
                         }
                     },
                     onFailure = { exception ->

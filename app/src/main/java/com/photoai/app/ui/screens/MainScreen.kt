@@ -5,8 +5,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -44,7 +47,7 @@ import android.graphics.Bitmap
 import java.io.File
 import java.io.FileOutputStream
 
-@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
@@ -59,7 +62,7 @@ fun MainScreen(
     val editedImageUrl by viewModel.editedImageUrl
     val isProcessing by viewModel.isProcessing
     val errorMessage by viewModel.errorMessage
-    val showOriginal by viewModel.showOriginal
+    val currentPage by viewModel.currentPage
     val saveMessage by viewModel.saveMessage
     val downsizeImages by viewModel.downsizeImages
     val inputFidelity by viewModel.inputFidelity
@@ -69,9 +72,6 @@ fun MainScreen(
     LaunchedEffect(Unit) {
         viewModel.loadProcessingPreferences(context)
     }
-    
-    // Fullscreen image state
-    var showFullscreenImage by remember { mutableStateOf(false) }
     
     // Navigation state
     var showPromptsEditor by remember { mutableStateOf(false) }
@@ -318,101 +318,62 @@ fun MainScreen(
                 ) {
                     // Title for the panel
                     Text(
-                        text = if (showOriginal) "📷 Original Image" else "✨ Edited Image",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = if (showOriginal) Color(0xFF7FC7D9) else Color(0xFFFFB3BA),
+                    text = if (currentPage == 0) "📷 Original Image" else "✨ Edited Image",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (currentPage == 0) Color(0xFF7FC7D9) else Color(0xFFFFB3BA),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 16.dp)
                     )
                     
-                    // Toggle and Save buttons
-                    if (editedImageUrl != null) {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                // Action buttons
+                if (editedImageUrl != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.handleChatCommand(context, "/share") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(45.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFD4ADFC)
+                            ),
+                            shape = RoundedCornerShape(20.dp)
                         ) {
-                            // First row: Toggle and action buttons
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                // Toggle button
-                                Button(
-                                    onClick = { viewModel.toggleImageView() },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(40.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFFFF2CC)
-                                    ),
-                                    shape = RoundedCornerShape(20.dp)
-                                ) {
-                                    Text(
-                                        text = if (showOriginal) "🎨 Show Edited" else "📷 Show Original",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF8B7355),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                
-                                // Action buttons (only show for edited image)
-                                if (!showOriginal) {
-                                    // Share button
-                                    Button(
-                                        onClick = { shareEditedImage() },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(40.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFD4ADFC)
-                                        ),
-                                        shape = RoundedCornerShape(20.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Share,
-                                            contentDescription = "Share",
-                                            modifier = Modifier.size(16.dp),
-                                            tint = Color.White
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Share", color = Color.White, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                            
-                            // Second row: Save button (only show for edited image)
-                            if (!showOriginal) {
-                                Button(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            val bitmap = urlToBitmap(editedImageUrl!!)
-                                            bitmap?.let {
-                                                viewModel.saveEditedImage(context, it)
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(45.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFC7EACD)
-                                    ),
-                                    shape = RoundedCornerShape(22.dp)
-                                ) {
-                                    Text(
-                                        text = "💾 Save to Gallery",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color(0xFF2D5016),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = "Share",
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { viewModel.handleChatCommand(context, "/save") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(45.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFC7EACD)
+                            ),
+                            shape = RoundedCornerShape(22.dp)
+                        ) {
+                            Text(
+                                text = "💾 Save",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFF2D5016),
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
+                }
                     
                     // Display the appropriate image with processing overlay
                     Box(
@@ -420,41 +381,69 @@ fun MainScreen(
                             .fillMaxWidth()
                             .height(300.dp)
                     ) {
-                        val imageToShow = if (showOriginal || editedImageUrl == null) uri.toString() else editedImageUrl!!
+                        val pagerState = rememberPagerState(
+                            pageCount = { if (editedImageUrl != null) 2 else 1 }
+                        )
                         
-                        // Debug logging
-                        if (editedImageUrl != null && !showOriginal) {
-                            android.util.Log.d("MainScreen", "Displaying edited image URL (first 100 chars): ${editedImageUrl!!.take(100)}")
-                            android.util.Log.d("MainScreen", "Is data URL: ${editedImageUrl!!.startsWith("data:image/")}")
+                        // Keep ViewModel's currentPage in sync with pager
+                        LaunchedEffect(pagerState.currentPage) {
+                            viewModel.setCurrentPage(pagerState.currentPage)
                         }
-                        
-                        Image(
-                            painter = rememberAsyncImagePainter(
-                                model = imageToShow,
-                                onError = { error ->
-                                    android.util.Log.e("MainScreen", "Image loading error: ${error.result.throwable}")
-                                }
-                            ),
-                            contentDescription = if (showOriginal) "Original image" else "Edited image",
+
+                        Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    brush = Brush.radialGradient(
-                                        colors = listOf(
-                                            Color(0xFFE17055).copy(alpha = 0.1f),
-                                            Color(0xFF74B9FF).copy(alpha = 0.1f)
+                                .clickable { viewModel.toggleFullScreenMode() }
+                        ) {
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        brush = Brush.radialGradient(
+                                            colors = listOf(
+                                                Color(0xFFE17055).copy(alpha = 0.1f),
+                                                Color(0xFF74B9FF).copy(alpha = 0.1f)
+                                            )
                                         )
                                     )
+                            ) { page ->
+                                Image(
+                                    painter = rememberAsyncImagePainter(
+                                        model = if (page == 0) uri else editedImageUrl,
+                                        onError = { error ->
+                                            android.util.Log.e("MainScreen", "Image loading error: ${error.result.throwable}")
+                                        }
+                                    ),
+                                    contentDescription = if (page == 0) "Original image" else "Edited image",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
                                 )
-                                .clickable { 
-                                    // Only allow fullscreen for edited images
-                                    if (!showOriginal && editedImageUrl != null) {
-                                        showFullscreenImage = true
+                            }
+                            
+                            if (editedImageUrl != null) {
+                                Row(
+                                    Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    repeat(pagerState.pageCount) { page ->
+                                        Box(
+                                            Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    color = if (page == pagerState.currentPage) 
+                                                        MaterialTheme.colorScheme.primary 
+                                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                                    shape = CircleShape
+                                                )
+                                        )
                                     }
-                                },
-                            contentScale = ContentScale.Fit
-                        )
+                                }
+                            }
+                        }
                         
                         // Processing overlay
                         if (isProcessing) {
@@ -755,8 +744,10 @@ fun MainScreen(
                     Button(
                         onClick = {
                             if (customPrompt.isNotBlank()) {
+                                // Use current image as input
+                                // Always use original image as input
                                 selectedImageUri?.let { uri ->
-                                     viewModel.editImage(context, uri, customPrompt)
+                                    viewModel.editImage(context, uri, customPrompt)
                                 }
                             }
                         },
@@ -880,72 +871,14 @@ fun MainScreen(
         }
     }
     
-    // Fullscreen Image Dialog
-    if (showFullscreenImage && editedImageUrl != null) {
-        FullscreenImageDialog(
-            imageUrl = editedImageUrl!!,
-            onDismiss = { showFullscreenImage = false }
+    // Open fullscreen mode when needed
+    if (viewModel.isFullScreenMode.value) {
+        FullScreenImageDialog(
+            originalUri = selectedImageUri!!,
+            editedUri = editedImageUrl?.let { Uri.parse(it) },
+            onDismiss = { viewModel.toggleFullScreenMode() },
+            currentPage = viewModel.currentPage.value,
+            onPageChanged = { viewModel.setCurrentPage(it) }
         )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FullscreenImageDialog(
-    imageUrl: String,
-    onDismiss: () -> Unit
-) {
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(
-            usePlatformDefaultWidth = false
-        )
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF8B8680),
-                            Color(0xFFA19B96)
-                        )
-                    )
-                )
-        ) {
-            // Close button
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = androidx.compose.material.icons.Icons.Default.Close,
-                    contentDescription = "Close fullscreen",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            
-            // Fullscreen image
-            Image(
-                painter = rememberAsyncImagePainter(
-                    model = imageUrl,
-                    onError = { error ->
-                        android.util.Log.e("MainScreen", "Fullscreen image loading error: ${error.result.throwable}")
-                    }
-                ),
-                contentDescription = "Fullscreen edited image",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-                    .clickable { onDismiss() }, // Allow tap to dismiss
-                contentScale = ContentScale.Fit
-            )
-        }
     }
 }

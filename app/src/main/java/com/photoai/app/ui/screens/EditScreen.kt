@@ -3,6 +3,7 @@ package com.photoai.app.ui.screens
 import android.net.Uri
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -23,13 +24,15 @@ import androidx.compose.runtime.DisposableEffect
 import android.view.WindowManager
 import android.app.Activity
 import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.photoai.app.utils.PromptsLoader
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditScreen(
     imageUri: Uri,
@@ -131,29 +134,76 @@ fun EditScreen(
                     }
                 }
                 
-                // Image Preview (70% of remaining height)
+                // Image Preview with Pager (70% of remaining height)
+                val pagerState = rememberPagerState(
+                    pageCount = { if (viewModel.editedImageUrl.value != null) 2 else 1 }
+                )
+                
                 Box(
                     modifier = Modifier
                         .weight(0.7f)
                         .fillMaxWidth()
                 ) {
+                    
+                    // Keep ViewModel's currentPage in sync with pager
+                    LaunchedEffect(pagerState.currentPage) {
+                        viewModel.setCurrentPage(pagerState.currentPage)
+                    }
+
+                    // Ensure edited image is shown when OpenAI call returns
+                    LaunchedEffect(viewModel.editedImageUrl.value) {
+                        if (viewModel.editedImageUrl.value != null) {
+                            pagerState.animateScrollToPage(1)
+                        }
+                    }
+
                     Card(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(8.dp),
+                            .padding(8.dp)
+                            .clickable { viewModel.toggleFullScreenMode() },
                         shape = RoundedCornerShape(16.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                     ) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
+                            modifier = Modifier.fillMaxSize()
                         ) {
-                            AsyncImage(
-                                model = imageUri,
-                                contentDescription = "Selected image",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    AsyncImage(
+                                        model = if (page == 0) imageUri else viewModel.editedImageUrl.value,
+                                        contentDescription = if (page == 0) "Original image" else "Edited image",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                }
+                            }
+
+                            // Add page indicator if we have both images
+                            if (viewModel.editedImageUrl.value != null) {
+                                Row(
+                                    Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    repeat(pagerState.pageCount) { page ->
+                                        Box(
+                                            Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    color = if (page == pagerState.currentPage) 
+                                                        MaterialTheme.colorScheme.primary 
+                                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                                    shape = CircleShape
+                                                )
+                                        )
+                                    }
+                                }
+                            }
                             
                             // Processing overlay
                             if (viewModel.isProcessing.value) {
@@ -192,6 +242,16 @@ fun EditScreen(
                             }
                         }
                     }
+                }
+
+                if (viewModel.isFullScreenMode.value) {
+                    FullScreenImageDialog(
+                        originalUri = imageUri,
+                        editedUri = viewModel.editedImageUrl.value?.let { Uri.parse(it) },
+                        onDismiss = { viewModel.toggleFullScreenMode() },
+                        currentPage = viewModel.currentPage.value,
+                        onPageChanged = { viewModel.setCurrentPage(it) }
+                    )
                 }
                 
                 // Prompt Selection Area (30% of remaining height)
@@ -268,7 +328,18 @@ fun EditScreen(
                     ) {
                         OutlinedTextField(
                             value = viewModel.customPrompt.value,
-                            onValueChange = { viewModel.updateCustomPrompt(it) },
+                            onValueChange = { prompt ->
+                                if (prompt.startsWith("/")) {
+                                    if (prompt in listOf("/share", "/save")) {
+                                        viewModel.handleChatCommand(context, prompt)
+                                        viewModel.updateCustomPrompt("")
+                                    } else {
+                                        viewModel.updateCustomPrompt(prompt)
+                                    }
+                                } else {
+                                    viewModel.updateCustomPrompt(prompt)
+                                }
+                            },
                             modifier = Modifier.weight(1f),
                             placeholder = { Text("Enter your prompt...") },
                             maxLines = 1,
@@ -281,11 +352,27 @@ fun EditScreen(
                             ),
                             textStyle = MaterialTheme.typography.bodyMedium
                         )
-                        
                         FloatingActionButton(
                             onClick = {
                                 if (viewModel.customPrompt.value.isNotBlank() && !viewModel.isProcessing.value) {
-                                    viewModel.editImage(context, imageUri, viewModel.customPrompt.value)
+                                    // Use currently displayed image based on pager state
+                                    if (pagerState.currentPage == 0) {
+                                        viewModel.editImage(
+                                            context = context,
+                                            uri = imageUri,
+                                            prompt = viewModel.customPrompt.value,
+                                            isEditingEditedImage = false
+                                        )
+                                    } else {
+                                        viewModel.editedImageUrl.value?.let { editedUrl ->
+                                            viewModel.editImage(
+                                                context = context,
+                                                uri = Uri.parse(editedUrl),
+                                                prompt = viewModel.customPrompt.value,
+                                                isEditingEditedImage = true
+                                            )
+                                        }
+                                    }
                                 }
                             },
                             containerColor = if (!viewModel.isProcessing.value && viewModel.customPrompt.value.isNotBlank())

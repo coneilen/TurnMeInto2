@@ -27,7 +27,7 @@ object PromptsLoader {
     // Default base prompt
     private const val DEFAULT_BASE_PROMPT = """Use the following prompt to edit the provided image.
 The generated image should maintain the facial features and build of the person so they are easily recognizable.
-You should keep any spectacles the person is wearing.
+You should keep any eye glasses the person is wearing, but do not add them if they are not already wearing them.
 Maintain the color and lighting of the scene.
 The generated image should be photorealistic.
 Prompt: 

@@ -66,12 +66,17 @@ fun PhotoAITheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            // Set status bar color to transparent
-            window.statusBarColor = Color.Transparent.toArgb()
-            // Make status bar icons dark in light theme, light in dark theme
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-            // Enable edge-to-edge
-            WindowCompat.setDecorFitsSystemWindows(window, false)
+            // Set status bar color to match theme background
+            window.statusBarColor = colorScheme.background.toArgb()
+            
+            // Set navigation bar color to match theme background
+            window.navigationBarColor = colorScheme.background.toArgb()
+            
+            // Make status/nav bar icons dark in light theme, light in dark theme
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
         }
     }
 
