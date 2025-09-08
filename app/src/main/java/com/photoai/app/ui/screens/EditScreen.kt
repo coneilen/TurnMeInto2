@@ -29,6 +29,8 @@ import android.app.Activity
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.pager.*
+import com.photoai.app.ui.theme.PastelPrimary
+import com.photoai.app.ui.theme.PastelSecondary
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -412,23 +414,48 @@ fun EditScreen(
                                 unfocusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                             ),
                             textStyle = MaterialTheme.typography.bodyMedium,
-                            trailingIcon = {
-                                if (viewModel.customPrompt.value.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = {
-                                            viewModel.updateCustomPrompt("")
-                                            currentPromptName = null
-                                        },
-                                        enabled = !viewModel.isProcessing.value
+                            leadingIcon = if (viewModel.customPrompt.value.isEmpty()) {
+                                {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(start = 12.dp)
+                                            .size(32.dp)
+                                            .background(PastelPrimary, CircleShape)
+                                            .clickable { 
+                                                viewModel.updateCustomPrompt("/", null, null)
+                                                viewModel.showCommandSuggestions.value = true
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "/",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
+                                }
+                            } else null,
+                            trailingIcon = if (viewModel.customPrompt.value.isNotEmpty()) {
+                                {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(end = 12.dp)
+                                            .size(32.dp)
+                                            .background(PastelSecondary, CircleShape)
+                                            .clickable(enabled = !viewModel.isProcessing.value) {
+                                                viewModel.updateCustomPrompt("")
+                                                currentPromptName = null
+                                            },
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Filled.Clear,
                                             contentDescription = "Clear text",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                            tint = Color.White
                                         )
                                     }
                                 }
-                            }
+                            } else null
                         )
 
                         // Command Suggestions
@@ -437,21 +464,45 @@ fun EditScreen(
                             enter = fadeIn(),
                             exit = fadeOut()
                         ) {
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                contentPadding = PaddingValues(vertical = 4.dp),
-                                modifier = Modifier.fillMaxWidth()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                items(viewModel.availableCommands) { suggestion ->
-                                    SuggestionChip(
-                                        onClick = {
-                                            viewModel.handleChatCommand(context, suggestion.command)
-                                            viewModel.updateCustomPrompt("")
-                                            currentPromptName = null
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    contentPadding = PaddingValues(vertical = 4.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    items(viewModel.availableCommands) { suggestion ->
+                                        SuggestionChip(
+                                            onClick = {
+                                                viewModel.handleChatCommand(context, suggestion.command)
+                                                viewModel.updateCustomPrompt("")
+                                                currentPromptName = null
+                                                viewModel.showCommandSuggestions.value = false
+                                            },
+                                            label = { Text(suggestion.command) },
+                                            modifier = Modifier.animateContentSize()
+                                        )
+                                    }
+                                }
+                                // Escape button
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp)
+                                        .size(32.dp)
+                                        .background(PastelSecondary, CircleShape)
+                                        .clickable {
                                             viewModel.showCommandSuggestions.value = false
+                                            viewModel.updateCustomPrompt("", null, null)
                                         },
-                                        label = { Text(suggestion.command) },
-                                        modifier = Modifier.animateContentSize()
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Cancel command suggestions",
+                                        tint = Color.White
                                     )
                                 }
                             }

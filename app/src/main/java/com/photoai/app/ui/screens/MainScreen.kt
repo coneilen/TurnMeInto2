@@ -47,6 +47,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import java.io.File
 import java.io.FileOutputStream
+import com.photoai.app.ui.theme.PastelPrimary
+import com.photoai.app.ui.theme.PastelSecondary
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -636,7 +638,43 @@ fun MainScreen(
                         label = { Text("Enter your edit prompt (e.g., 'Turn this person into a dragon')") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
-                        maxLines = 4
+                        maxLines = 4,
+                        leadingIcon = if (customPrompt.isEmpty()) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(start = 12.dp)
+                                        .size(32.dp)
+                                        .background(PastelPrimary, CircleShape)
+                                        .clickable { viewModel.updateCustomPrompt("/", null, null) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "/",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                            }
+                        } else null,
+                        trailingIcon = if (customPrompt.isNotEmpty()) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(end = 12.dp)
+                                        .size(32.dp)
+                                        .background(PastelSecondary, CircleShape)
+                                        .clickable { viewModel.updateCustomPrompt("", null, null) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Clear prompt",
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+                        } else null
                     )
                     
                                         // Image processing options
