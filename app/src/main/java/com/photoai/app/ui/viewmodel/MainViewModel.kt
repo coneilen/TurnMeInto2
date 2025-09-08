@@ -11,6 +11,7 @@ import android.os.Environment
 import android.os.PowerManager
 import android.provider.MediaStore
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -63,6 +64,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         
     var isLoadingPersonCount = mutableStateOf(false)
         private set
+    
+    // Combined state for all loading states
+    val isAnyLoading = derivedStateOf {
+        isLoadingPersonCount.value || isGeneratingPrompts.value || isProcessing.value
+    }
     
     var loadingMessage = mutableStateOf<String?>(null)
         private set

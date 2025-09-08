@@ -131,15 +131,24 @@ fun EditScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(
+                        onClick = onBackClick,
+                        enabled = !viewModel.isAnyLoading.value
+                    ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
                             contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = if (viewModel.isAnyLoading.value) 
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            else 
+                                MaterialTheme.colorScheme.primary
                         )
                     }
                     
-                    IconButton(onClick = onSettingsClick) {
+                    IconButton(
+                        onClick = onSettingsClick,
+                        enabled = !viewModel.isAnyLoading.value
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings",
@@ -176,7 +185,11 @@ fun EditScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(8.dp)
-                            .clickable { viewModel.toggleFullScreenMode() },
+                            .clickable(
+                                enabled = !viewModel.isAnyLoading.value
+                            ) { 
+                                viewModel.toggleFullScreenMode() 
+                            },
                         shape = RoundedCornerShape(16.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                     ) {
@@ -323,9 +336,10 @@ fun EditScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             items(categoryNames) { category ->
-                                FilterChip(
-                                    selected = category == selectedCategory,
-                                    onClick = { selectedCategory = category },
+                            FilterChip(
+                                selected = category == selectedCategory,
+                                onClick = { selectedCategory = category },
+                                enabled = !viewModel.isAnyLoading.value,
                                     label = { 
                                         Text(
                                             text = category,
@@ -352,6 +366,7 @@ fun EditScreen(
                         items(categoryPrompts) { prompt ->
                             ElevatedFilterChip(
                                 selected = viewModel.customPrompt.value == prompt.prompt,
+                                enabled = !viewModel.isAnyLoading.value,
                                 onClick = { 
                                     currentPromptName = prompt.name
                                     viewModel.updateCustomPrompt(
@@ -476,9 +491,11 @@ fun EditScreen(
                                 ) {
                                     items(viewModel.availableCommands) { suggestion ->
                                         SuggestionChip(
-                                            onClick = {
-                                                viewModel.handleChatCommand(context, suggestion.command)
-                                                viewModel.updateCustomPrompt("")
+                                onClick = {
+                                    if (!viewModel.isAnyLoading.value) {
+                                        viewModel.handleChatCommand(context, suggestion.command)
+                                        viewModel.updateCustomPrompt("")
+                                    }
                                                 currentPromptName = null
                                                 viewModel.showCommandSuggestions.value = false
                                             },
@@ -493,10 +510,12 @@ fun EditScreen(
                                         .padding(horizontal = 8.dp)
                                         .size(32.dp)
                                         .background(PastelSecondary, CircleShape)
-                                        .clickable {
-                                            viewModel.showCommandSuggestions.value = false
-                                            viewModel.updateCustomPrompt("", null, null)
-                                        },
+                                    .clickable(
+                                        enabled = !viewModel.isAnyLoading.value
+                                    ) { 
+                                        viewModel.showCommandSuggestions.value = false
+                                        viewModel.updateCustomPrompt("", null, null)
+                                    },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
