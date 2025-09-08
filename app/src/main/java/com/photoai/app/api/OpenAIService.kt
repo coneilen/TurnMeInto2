@@ -265,6 +265,9 @@ class OpenAIService {
         quality: String = "low", // "low", "medium", or "high"
         isEditingEditedImage: Boolean = false
     ): Result<String> {
+        // Force high quality settings when editing an edited image to prevent quality degradation
+        val effectiveInputFidelity = if (isEditingEditedImage) "high" else inputFidelity
+        val effectiveQuality = if (isEditingEditedImage) "high" else quality
         return withContext(Dispatchers.IO) {
             try {
                 if (BuildConfig.OPENAI_API_KEY.isBlank()) {
@@ -391,8 +394,8 @@ class OpenAIService {
                     n = nBody,
                     size = sizeBody,
                     user = null,
-                    input_fidelity = inputFidelityBody,
-                    quality = qualityBody
+                    input_fidelity = effectiveInputFidelity.toRequestBody("text/plain".toMediaType()),
+                    quality = effectiveQuality.toRequestBody("text/plain".toMediaType())
                 )
                 
                 if (response.isSuccessful) {
