@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
+import com.photoai.app.ui.components.SparkleProcessingOverlay
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -297,38 +298,7 @@ fun EditScreen(
 
                             // Processing overlay
                             if (viewModel.isProcessing.value) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.7f))
-                                        .animateContentSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Card(
-                                        modifier = Modifier.padding(32.dp),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
-                                        ),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(24.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                                        ) {
-                                            CircularProgressIndicator(
-                                                color = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(48.dp),
-                                                strokeWidth = 4.dp
-                                            )
-                                            Text(
-                                                text = "Processing image...",
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
+                                SparkleProcessingOverlay()
                             }
                         }
                     }
