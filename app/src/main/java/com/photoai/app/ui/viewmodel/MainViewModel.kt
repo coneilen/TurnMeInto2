@@ -41,7 +41,14 @@ sealed class Screen {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val openAIService = OpenAIService.getInstance()
     private var wakeLock: PowerManager.WakeLock? = null
-
+    
+    // New states for prompt generation tracking
+    var promptGenerationProgress = mutableStateOf(1f)
+        private set
+    
+    var isGeneratingMultiPersonPrompts = mutableStateOf(false)
+        private set
+    
     // List of available commands
     val availableCommands = listOf(
         CommandSuggestion("/share", "Share the current image"),
@@ -139,6 +146,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loadingMessage.value = "Processing input image"
                 personCountError.value = null
                 
+                // Acquire wake lock for API call
+                acquireWakeLock(getApplication())
+                
                 val result = openAIService.detectPersons(getApplication(), uri)
                 
                 result.fold(
@@ -159,10 +169,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // If multiple people detected, ensure multi-person prompts are generated
                 if (personCount.value != null && personCount.value!! > 1) {
                     try {
-                        // Load prompts to trigger multi-person prompt generation
-                        PromptsLoader.loadPrompts(getApplication())
+                        // Setup progress tracking
+                        isGeneratingMultiPersonPrompts.value = true
+                        PromptsLoader.setGenerationCallback { progress ->
+                            promptGenerationProgress.value = progress
+                            if (progress >= 1f) {
+                                isGeneratingMultiPersonPrompts.value = false
+                            }
+                        }
+                        
+                        // Load prompts - allow expiry check here since it's initial load
+                        PromptsLoader.loadPrompts(getApplication(), forceRegenerate = false, ignoreCacheExpiry = false)
                     } catch (e: Exception) {
                         android.util.Log.e("MainViewModel", "Failed to generate multi-person prompts: ${e.message}")
+                        isGeneratingMultiPersonPrompts.value = false
+                        promptGenerationProgress.value = 1f
                     }
                 }
                 
@@ -172,6 +193,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 isLoadingPersonCount.value = false
                 loadingMessage.value = null
+                releaseWakeLock()
             }
         }
     }
@@ -212,14 +234,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentCategory = category
             currentPromptName = promptName
 
-            // Check if we need to use multi-person prompt
+            // Check if we need to use multi-person prompt - and don't use cache if we just cleared prompts
             if (personCount.value != null && personCount.value!! > 1 && category != null && promptName != null) {
                 android.util.Log.d("MainViewModel", "Multiple people detected, getting multi-person prompt")
                 try {
-                    // Ensure prompts are loaded
-                    PromptsLoader.loadPrompts(getApplication())
+                    // Setup progress tracking first
+                    isGeneratingMultiPersonPrompts.value = true
+                    PromptsLoader.setGenerationCallback { progress ->
+                        promptGenerationProgress.value = progress
+                        if (progress >= 1f) {
+                            isGeneratingMultiPersonPrompts.value = false
+                        }
+                    }
                     
-                    // Get multi-person prompt if available
+                    // Use cached prompts unless they don't exist
+                    PromptsLoader.loadPrompts(getApplication(), forceRegenerate = false, ignoreCacheExpiry = true)
+                    
+                    // Use cached multi-person prompt
                     val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(category, promptName)
                     if (multiPersonPrompt != null) {
                         android.util.Log.d("MainViewModel", "Using multi-person prompt: ${multiPersonPrompt.take(50)}...")
@@ -257,13 +288,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val shouldUseMultiPersonPrompt = personCount.value != null && personCount.value!! > 1
         if (shouldUseMultiPersonPrompt) {
             android.util.Log.d("MainViewModel", "Multiple people detected, attempting to get multi-person prompt")
-            try {
-                // First ensure prompts are loaded and multi-person prompts are generated
-                isGeneratingPrompts.value = true
-                loadingMessage.value = "Generating prompts"
-                
                 try {
-                    PromptsLoader.loadPrompts(context)
+                    // First ensure prompts are loaded and multi-person prompts are generated
+                    isGeneratingPrompts.value = true
+                    loadingMessage.value = "Generating prompts"
+                    
+                    try {
+                        // Setup progress tracking if not already set
+                        if (!isGeneratingMultiPersonPrompts.value) {
+                            isGeneratingMultiPersonPrompts.value = true
+                            PromptsLoader.setGenerationCallback { progress ->
+                                promptGenerationProgress.value = progress
+                                if (progress >= 1f) {
+                                    isGeneratingMultiPersonPrompts.value = false
+                                }
+                            }
+                        }
+                        
+                        // Use cached prompts unless they don't exist
+                        PromptsLoader.loadPrompts(context, forceRegenerate = false, ignoreCacheExpiry = true)
                     
                     // After prompts are loaded, check for multi-person version
                     val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(currentCategory!!, currentPromptName!!)
@@ -322,15 +365,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentCategory = null
                 currentPromptName = null
                 
-                // Force regeneration of multi-person prompts
-                android.util.Log.d("MainViewModel", "Regenerating prompts...")
-                val prompts = PromptsLoader.loadPrompts(context)
-                android.util.Log.d("MainViewModel", "Loaded ${prompts.prompts.size} categories")
-                
-                // Reprocess current image if one is selected
-                android.util.Log.d("MainViewModel", "Reprocessing current image...")
-                selectedImageUri.value?.let { 
-                    detectPersonCount(it)
+                // Force immediate regeneration of prompts if needed
+                if (selectedImageUri.value != null && personCount.value != null && personCount.value!! > 1) {
+                    isGeneratingPrompts.value = true
+                    loadingMessage.value = "Regenerating prompts"
+                    
+                    try {
+                        // Setup progress tracking
+                        isGeneratingMultiPersonPrompts.value = true
+                        PromptsLoader.setGenerationCallback { progress ->
+                            promptGenerationProgress.value = progress
+                            if (progress >= 1f) {
+                                isGeneratingMultiPersonPrompts.value = false
+                            }
+                        }
+                        
+                        // Force regeneration after clearing cache
+                        android.util.Log.d("MainViewModel", "Force regenerating prompts...")
+                        PromptsLoader.loadPrompts(context, forceRegenerate = true, ignoreCacheExpiry = true)
+                        android.util.Log.d("MainViewModel", "Prompts regenerated")
+                        
+                        // Reset prompt selection
+                        customPrompt.value = ""
+                        currentCategory = null
+                        currentPromptName = null
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainViewModel", "Failed to regenerate prompts: ${e.message}")
+                        errorMessage.value = "Failed to regenerate prompts: ${e.message}"
+                    }
+                } else {
+                    android.util.Log.d("MainViewModel", "No active multi-person image, just clearing cache")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MainViewModel", "Failed to regenerate prompts: ${e.message}")
@@ -338,6 +402,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 isGeneratingPrompts.value = false
                 loadingMessage.value = null
+                // Reset progress tracking
+                PromptsLoader.setGenerationCallback(null)
+                isGeneratingMultiPersonPrompts.value = false
+                promptGenerationProgress.value = 1f
             }
         }
     }
@@ -349,7 +417,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,
                 "PhotoAI:ImageProcessing"
             )
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes max
+            wakeLock?.acquire(15 * 60 * 1000L) // 15 minutes max
             android.util.Log.d("MainViewModel", "Wake lock acquired")
         } catch (e: Exception) {
             android.util.Log.e("MainViewModel", "Failed to acquire wake lock: ${e.message}")

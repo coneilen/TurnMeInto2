@@ -17,16 +17,7 @@ object PromptsLoader {
     private const val KEY_INPUT_FIDELITY = "input_fidelity"
     private const val KEY_QUALITY = "quality"
     private const val KEY_MULTI_PERSON_PROMPTS = "multi_person_prompts"
-    
-    private var cachedPromptsData: PromptsData? = null
-    private var cachedFlexiblePrompts: Map<String, List<PromptsData.Prompt>>? = null
-    private var cachedBasePrompt: String? = null
-    private var cachedDownsizeImages: Boolean? = null
-    private var cachedInputFidelity: String? = null
-    private var cachedQuality: String? = null
-    private var cachedMultiPersonPrompts: Map<String, Pair<String, Long>>? = null
-    
-    // Default base prompt
+
     private const val DEFAULT_BASE_PROMPT = """Use the following prompt to edit the provided image.
 The generated image should maintain the facial features and build of the person so they are easily recognizable.
 You should keep any eye glasses the person is wearing, but do not add them if they are not already wearing them.
@@ -35,164 +26,334 @@ The generated image should be photorealistic.
 Prompt: 
 """
     
-    private suspend fun ensureMultiPersonPrompts(context: Context, prompts: Map<String, List<PromptsData.Prompt>>) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val openAIService = com.photoai.app.api.OpenAIService.getInstance()
-        
-        // Load cached multi-person prompts
-        synchronized(this) {
-            if (cachedMultiPersonPrompts == null) {
-                val json = prefs.getString(KEY_MULTI_PERSON_PROMPTS, null)
-                cachedMultiPersonPrompts = if (json != null) {
-                    try {
-                        val gson = Gson()
-                        val type = object : TypeToken<Map<String, Pair<String, Long>>>() {}.type
-                        gson.fromJson<Map<String, Pair<String, Long>>>(json, type)
-                    } catch (e: Exception) {
-                        emptyMap()
-                    }
-                } else {
-                    emptyMap()
-                }
-            }
-        }
-        
-        val now = System.currentTimeMillis()
-        val CACHE_EXPIRY = 24 * 60 * 60 * 1000L // 24 hours
-        val multiPersonPrompts = mutableMapOf<String, Pair<String, Long>>()
-        val results = mutableListOf<Pair<String, String?>>()
-        
-        // First, collect all the prompts that need generation
-        prompts.forEach { (category, promptList) ->
-            promptList.forEach { prompt ->
-                val cacheKey = "${category}_${prompt.name}"
-                val cached = cachedMultiPersonPrompts?.get(cacheKey)
-                
-                if (cached == null || (now - cached.second) > CACHE_EXPIRY) {
-                    android.util.Log.d("PromptsLoader", "Will generate multi-person prompt for: $cacheKey")
-                    results.add(cacheKey to null)
-                } else {
-                    android.util.Log.d("PromptsLoader", "Using cached prompt for: $cacheKey")
-                    multiPersonPrompts[cacheKey] = cached
-                }
-            }
-        }
-        
-        // Generate all needed prompts with proper coroutine handling
-        results.forEach { (cacheKey, _) ->
-            val prompt = prompts[cacheKey.substringBefore("_")]
-                ?.find { "${cacheKey.substringBefore("_")}_${it.name}" == cacheKey }
-                ?.prompt
-                
-            if (prompt != null) {
-                try {
-                    android.util.Log.d("PromptsLoader", "Starting generation for: $cacheKey")
-                    val result = openAIService.generateMultiPersonPrompt(prompt)
-                    result.fold(
-                        onSuccess = { multiPersonPrompt ->
-                            android.util.Log.d("PromptsLoader", "Generated multi-person prompt for: $cacheKey")
-                            multiPersonPrompts[cacheKey] = Pair(multiPersonPrompt, now)
-                        },
-                        onFailure = { error ->
-                            android.util.Log.e("PromptsLoader", "Failed to generate multi-person prompt for $cacheKey: ${error.message}")
-                        }
-                    )
-                } catch (e: Exception) {
-                    android.util.Log.e("PromptsLoader", "Error generating multi-person prompt for $cacheKey: ${e.message}")
-                }
-            }
-        }
-        
-        android.util.Log.d("PromptsLoader", "Generated ${multiPersonPrompts.size} prompts")
-        
-        // Update cache atomically
-        synchronized(this) {
-            if (multiPersonPrompts.isNotEmpty()) {
-                android.util.Log.d("PromptsLoader", "Updating cache with ${multiPersonPrompts.size} prompts")
-                val gson = Gson()
-                val json = gson.toJson(multiPersonPrompts)
-                prefs.edit()
-                    .putString(KEY_MULTI_PERSON_PROMPTS, json)
-                    .apply()
-                cachedMultiPersonPrompts = multiPersonPrompts
-            }
-        }
-    }
+private const val KEY_VERSION_PREFIX = "v2_"
+private val specialCharsRegex = Regex("[^a-zA-Z0-9\\s]")
+private val multipleWhitespaceRegex = Regex("\\s+")
+private var generationInProgress = false
+private var totalPromptsToGenerate = 0
+private var promptsGenerated = 0
+private var generationCallback: ((Float) -> Unit)? = null
     
-    /**
-     * Get multi-person prompt if available
-     */
-    private fun normalizeCategory(category: String): String {
-        android.util.Log.d("PromptsLoader", "Normalizing category: $category")
-        val normalized = when (category.lowercase().trim()) {
-            "movie/tv", "movie_tv" -> "movie_tv"
-            "face paint", "face_paint" -> "face_paint"
-            "ghost/monster", "ghost_monster" -> "ghost_monster"
-            else -> category.lowercase().trim()
-        }
-        android.util.Log.d("PromptsLoader", "Normalized category: $normalized")
-        return normalized
+    private var cachedPromptsData: PromptsData? = null
+    private var cachedFlexiblePrompts: Map<String, List<PromptsData.Prompt>>? = null
+    private var cachedBasePrompt: String? = null
+    private var cachedDownsizeImages: Boolean? = null
+    private var cachedInputFidelity: String? = null
+    private var cachedQuality: String? = null
+    private var cachedMultiPersonPrompts: Map<String, Pair<String, Long>>? = null
+
+    fun isGeneratingPrompts(): Boolean = generationInProgress
+
+    fun getGenerationProgress(): Float {
+        return if (totalPromptsToGenerate == 0) 1f else promptsGenerated.toFloat() / totalPromptsToGenerate
     }
 
-    fun getMultiPersonPrompt(category: String, promptName: String): String? {
-        val normalizedCategory = normalizeCategory(category)
-        android.util.Log.d("PromptsLoader", "Getting multi-person prompt. Category: $category, Normalized: $normalizedCategory, Prompt: $promptName")
-        val cacheKey = "${normalizedCategory}_${promptName}"
-        
-        synchronized(this) {
-            val prompt = cachedMultiPersonPrompts?.get(cacheKey)?.first
-            if (prompt != null) {
-                android.util.Log.d("PromptsLoader", "Found multi-person prompt for key: $cacheKey, prompt: ${prompt.take(50)}...")
-            } else {
-                android.util.Log.e("PromptsLoader", "No multi-person prompt found for key: $cacheKey")
+    fun setGenerationCallback(callback: ((Float) -> Unit)?) {
+        generationCallback = callback
+        // Ensure any pending completion state is communicated to the new callback
+        if (callback != null && !generationInProgress) {
+            callback(1f)
+        }
+    }
+
+    private fun updateProgress(progress: Float) {
+        generationCallback?.let { callback ->
+            val coercedProgress = progress.coerceIn(0f, 1f)
+            callback(coercedProgress)
+            if (coercedProgress >= 1f) {
+                generationInProgress = false
             }
+        }
+    }
+
+    fun getBasePrompt(context: Context): String {
+        cachedBasePrompt?.let { return it }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val basePrompt = prefs.getString(KEY_BASE_PROMPT, DEFAULT_BASE_PROMPT) ?: DEFAULT_BASE_PROMPT
+        cachedBasePrompt = basePrompt
+        return basePrompt
+    }
+
+    fun saveBasePrompt(context: Context, basePrompt: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_BASE_PROMPT, basePrompt)
+            .apply()
+        cachedBasePrompt = null
+    }
+
+    fun getDownsizeImages(context: Context): Boolean {
+        cachedDownsizeImages?.let { return it }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val downsizeImages = prefs.getBoolean(KEY_DOWNSIZE_IMAGES, true)
+        cachedDownsizeImages = downsizeImages
+        return downsizeImages
+    }
+
+    fun saveDownsizeImages(context: Context, downsizeImages: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean(KEY_DOWNSIZE_IMAGES, downsizeImages)
+            .apply()
+        cachedDownsizeImages = null
+    }
+
+    fun getInputFidelity(context: Context): String {
+        cachedInputFidelity?.let { return it }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val inputFidelity = prefs.getString(KEY_INPUT_FIDELITY, "low") ?: "low"
+        cachedInputFidelity = inputFidelity
+        return inputFidelity
+    }
+
+    fun saveInputFidelity(context: Context, inputFidelity: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_INPUT_FIDELITY, inputFidelity)
+            .apply()
+        cachedInputFidelity = null
+    }
+
+    fun getQuality(context: Context): String {
+        cachedQuality?.let { return it }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val quality = prefs.getString(KEY_QUALITY, "low") ?: "low"
+        cachedQuality = quality
+        return quality
+    }
+
+    fun saveQuality(context: Context, quality: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY_QUALITY, quality)
+            .apply()
+        cachedQuality = null
+    }
+
+    // Format category name for display purposes
+    private fun formatCategoryForDisplay(category: String): String {
+        return category.split(Regex("[_\\s/-]+"))
+            .joinToString(" ") { word ->
+                word.trim().replaceFirstChar { it.uppercase() }
+            }
+    }
+
+    // Convert display name back to storage format (with underscores)
+    private fun formatDisplayToStorage(displayName: String): String {
+        return displayName.lowercase().replace(" ", "_")
+    }
+
+    private fun encodePart(raw: String): String =
+        android.util.Base64.encodeToString(
+            raw.toByteArray(Charsets.UTF_8),
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+        )
+
+    private fun createCacheKeyV2(category: String, promptName: String): String {
+        return KEY_VERSION_PREFIX + encodePart(category) + "::" + encodePart(promptName.trim())
+    }
+
+    private fun createLegacyKey(category: String, promptName: String): String {
+        return "${category}_${promptName.trim()}"
+    }
+
+    fun getMultiPersonPrompt(displayCategory: String, promptName: String): String? {
+        synchronized(this) {
+            val rawCategory = getRawCategory(displayCategory)
+            // Use raw category for both v2 and legacy keys
+            val v2Key = createCacheKeyV2(rawCategory, promptName)
+            android.util.Log.d("PromptsLoader", "Looking up v2 key: $v2Key")
+            android.util.Log.d("PromptsLoader", "Available cache keys: ${cachedMultiPersonPrompts?.keys}")
+            var prompt = cachedMultiPersonPrompts?.get(v2Key)?.first
+
+            if (prompt == null) {
+                // Try legacy key
+                val legacyKey = createLegacyKey(rawCategory, promptName)
+                android.util.Log.d("PromptsLoader", "Looking up legacy key: $legacyKey")
+                prompt = cachedMultiPersonPrompts?.get(legacyKey)?.first
+
+                // If found with legacy key, migrate to v2 key
+                if (prompt != null) {
+                    cachedMultiPersonPrompts?.get(legacyKey)?.let { (promptValue, timestamp) ->
+                        val updatedMap = (cachedMultiPersonPrompts ?: emptyMap()).toMutableMap()
+                        updatedMap[v2Key] = Pair(promptValue, timestamp)
+                        cachedMultiPersonPrompts = updatedMap
+                    }
+                }
+            }
+
             return prompt
         }
     }
-    
-    /**
-     * Load prompts in the new flexible format that supports editing
-     */
-    suspend fun loadPrompts(context: Context): FlexiblePromptsData {
-        // Check if we have custom prompts in SharedPreferences
-        val customPrompts = loadCustomPrompts(context)
+
+    private suspend fun ensureMultiPersonPrompts(
+        context: Context,
+        prompts: Map<String, List<PromptsData.Prompt>>,
+        forceRegenerate: Boolean = false,
+        ignoreCacheExpiry: Boolean = false
+    ) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val openAIService = com.photoai.app.api.OpenAIService.getInstance()
         
-        val prompts = if (customPrompts.isNotEmpty()) {
-            // Return custom prompts if they exist
-            customPrompts
-        } else {
-            // Load default prompts from resources and convert to flexible format
-            val defaultPrompts = loadDefaultPrompts(context)
-            defaultPrompts.toFlexibleFormat()
+        // Reset progress tracking
+        totalPromptsToGenerate = 0
+        promptsGenerated = 0
+        generationInProgress = true
+        updateProgress(0f)
+
+        synchronized(this) {
+            if (cachedMultiPersonPrompts == null) {
+                val json = prefs.getString(KEY_MULTI_PERSON_PROMPTS, null)
+                android.util.Log.d("PromptsLoader", "Loading cached prompts, found json: ${json != null}")
+                if (json != null) {
+                    try {
+                        val gson = Gson()
+                        val type = object : TypeToken<Map<String, Pair<String, Long>>>() {}.type
+                        cachedMultiPersonPrompts = gson.fromJson(json, type)
+                        android.util.Log.d("PromptsLoader", "Loaded ${cachedMultiPersonPrompts?.size} cached prompts")
+                        android.util.Log.d("PromptsLoader", "Cache keys: ${cachedMultiPersonPrompts?.keys}")
+                    } catch (e: Exception) {
+                        android.util.Log.e("PromptsLoader", "Error loading cache: ${e.message}")
+                        cachedMultiPersonPrompts = emptyMap()
+                    }
+                } else {
+                    android.util.Log.d("PromptsLoader", "No cached prompts found")
+                    cachedMultiPersonPrompts = emptyMap()
+                }
+            }
         }
 
-        // Ensure multi-person prompts are generated and cached
-        ensureMultiPersonPrompts(context, prompts)
+        val now = System.currentTimeMillis()
+        val CACHE_EXPIRY = 7 * 24 * 60 * 60 * 1000L // 7 days
+        val multiPersonPrompts = mutableMapOf<String, Pair<String, Long>>()
+
+        // Count prompts that need generation
+        prompts.forEach { (category, promptList) ->
+            promptList.forEach { prompt ->
+                val v2Key = createCacheKeyV2(category, prompt.name)
+                val cached = cachedMultiPersonPrompts?.get(v2Key)
+                
+                if (forceRegenerate || cached == null || (!ignoreCacheExpiry && (now - cached.second) > CACHE_EXPIRY)) {
+                    totalPromptsToGenerate++
+                } else {
+                    multiPersonPrompts[v2Key] = cached
+                }
+            }
+        }
+
+        // If no prompts need generation, use cached data
+        if (totalPromptsToGenerate == 0) {
+            cachedMultiPersonPrompts?.let { multiPersonPrompts.putAll(it) }
+            updateProgress(1f)
+            return
+        }
+
+        // Generate new prompts as needed
+        prompts.forEach { (category, promptList) ->
+            promptList.forEach { prompt ->
+                val v2Key = createCacheKeyV2(category, prompt.name)
+                val cached = cachedMultiPersonPrompts?.get(v2Key)
+
+                if (forceRegenerate || cached == null || (!ignoreCacheExpiry && (now - cached.second) > CACHE_EXPIRY)) {
+                    try {
+                        val result = openAIService.generateMultiPersonPrompt(context, prompt.prompt)
+                        when {
+                            result.isSuccess -> {
+                                result.getOrNull()?.let { multiPersonPrompt ->
+                                    multiPersonPrompts[v2Key] = Pair(multiPersonPrompt, now)
+                                }
+                            }
+                            result.isFailure -> {
+                                android.util.Log.e("PromptsLoader", "Error generating prompt for $v2Key: ${result.exceptionOrNull()?.message}")
+                            }
+                        }
+                        promptsGenerated++
+                        updateProgress(promptsGenerated.toFloat() / totalPromptsToGenerate)
+                    } catch (e: Exception) {
+                        android.util.Log.e("PromptsLoader", "Error generating prompt for $v2Key: ${e.message}")
+                        promptsGenerated++ // Still update progress even on error
+                        updateProgress(promptsGenerated.toFloat() / totalPromptsToGenerate)
+                    }
+                }
+            }
+        }
+
+        // Save to cache
+        synchronized(this) {
+            if (multiPersonPrompts.isNotEmpty()) {
+                val filteredPrompts = multiPersonPrompts.filterKeys { it.startsWith(KEY_VERSION_PREFIX) }
+                android.util.Log.d("PromptsLoader", "Generated prompts before filtering: ${multiPersonPrompts.keys}")
+                android.util.Log.d("PromptsLoader", "Saving filtered prompts: ${filteredPrompts.keys}")
+                val gson = Gson()
+                val json = gson.toJson(filteredPrompts)
+                prefs.edit()
+                    .putString(KEY_MULTI_PERSON_PROMPTS, json)
+                    .apply()
+                cachedMultiPersonPrompts = filteredPrompts
+                android.util.Log.d("PromptsLoader", "Cache updated with ${filteredPrompts.size} prompts")
+            }
+        }
+
+        // Optional cleanup of stale entries after successful regeneration
+        val STALE_THRESHOLD = 30 * 24 * 60 * 60 * 1000L // 30 days
+        val allowedKeys = mutableSetOf<String>()
         
+        prompts.forEach { (category, promptList) ->
+            promptList.forEach { prompt ->
+                allowedKeys.add(createCacheKeyV2(category, prompt.name))
+            }
+        }
+
+        synchronized(this) {
+            cachedMultiPersonPrompts?.let { cached ->
+                val staleEntries = cached.filterKeys { key ->
+                    val timestamp = cached[key]?.second ?: 0L
+                    key.startsWith(KEY_VERSION_PREFIX) &&
+                    key !in allowedKeys &&
+                    (now - timestamp) > STALE_THRESHOLD
+                }
+
+                if (staleEntries.isNotEmpty()) {
+                    val updatedMap = cached.toMutableMap()
+                    staleEntries.keys.forEach { key ->
+                        updatedMap.remove(key)
+                    }
+                    val gson = Gson()
+                    val json = gson.toJson(updatedMap)
+                    prefs.edit()
+                        .putString(KEY_MULTI_PERSON_PROMPTS, json)
+                        .apply()
+                    cachedMultiPersonPrompts = updatedMap
+                }
+            }
+        }
+
+        // Ensure final progress update
+        updateProgress(1f)
+    }
+
+    suspend fun loadPrompts(
+        context: Context,
+        forceRegenerate: Boolean = false,
+        ignoreCacheExpiry: Boolean = false
+    ): FlexiblePromptsData {
+        if (forceRegenerate) {
+            clearDeviceCache(context)
+        }
+        
+        val customPrompts = loadCustomPrompts(context)
+        val prompts = if (customPrompts.isNotEmpty()) {
+            customPrompts
+        } else {
+            val defaultPrompts = loadDefaultPrompts(context)
+            defaultPrompts.toNormalizedFlexibleFormat()
+        }
+        
+        android.util.Log.d("PromptsLoader", "Loading prompts with forceRegenerate=$forceRegenerate")
+        ensureMultiPersonPrompts(context, prompts, forceRegenerate, ignoreCacheExpiry)
         return FlexiblePromptsData(prompts)
     }
-    
-    /**
-     * Save prompts to SharedPreferences
-     */
-    fun savePrompts(context: Context, promptsData: FlexiblePromptsData) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val gson = Gson()
-        val json = gson.toJson(promptsData.prompts)
-        
-        prefs.edit()
-            .putString(KEY_CUSTOM_PROMPTS, json)
-            .remove(KEY_MULTI_PERSON_PROMPTS) // Clear multi-person prompts when prompts are updated
-            .apply()
-        
-        // Clear caches so next load will use updated data
-        cachedFlexiblePrompts = null
-        cachedMultiPersonPrompts = null
-    }
-    
-    /**
-     * Load custom prompts from SharedPreferences
-     */
+
     private fun loadCustomPrompts(context: Context): Map<String, List<PromptsData.Prompt>> {
         cachedFlexiblePrompts?.let { return it }
         
@@ -202,20 +363,16 @@ Prompt:
         return try {
             val gson = Gson()
             val type = object : TypeToken<Map<String, List<PromptsData.Prompt>>>() {}.type
-            val prompts: Map<String, List<PromptsData.Prompt>> = gson.fromJson(json, type)
-            cachedFlexiblePrompts = prompts
-            prompts
+            val loadedPrompts: Map<String, List<PromptsData.Prompt>> = gson.fromJson(json, type)
+            cachedFlexiblePrompts = loadedPrompts
+            loadedPrompts
         } catch (e: Exception) {
             android.util.Log.e("PromptsLoader", "Error loading custom prompts: ${e.message}")
             emptyMap()
         }
     }
-    
-    /**
-     * Load default prompts from raw resource (legacy format)
-     */
+
     private fun loadDefaultPrompts(context: Context): PromptsData {
-        // Return cached data if available
         cachedPromptsData?.let { return it }
         
         return try {
@@ -225,206 +382,129 @@ Prompt:
             val promptsData = gson.fromJson(reader, PromptsData::class.java)
             reader.close()
             
-            // Cache the loaded data
             cachedPromptsData = promptsData
             promptsData
         } catch (e: Exception) {
             android.util.Log.e("PromptsLoader", "Error loading prompts: ${e.message}")
-            // Return empty data if loading fails
             PromptsData()
         }
     }
-    
-    /**
-     * Get all prompt names (backward compatibility)
-     */
-    suspend fun getAllPromptNames(context: Context): List<String> {
-        val flexiblePrompts = loadPrompts(context)
-        val allPrompts = mutableListOf<String>()
-        
-        flexiblePrompts.prompts.forEach { (category, prompts) ->
-            prompts.forEach { prompt ->
-                allPrompts.add("${category.replaceFirstChar { it.uppercase() }}: ${prompt.name}")
-            }
-        }
-        
-        return allPrompts
+
+    private fun PromptsData.toNormalizedFlexibleFormat(): Map<String, List<PromptsData.Prompt>> {
+        val flexibleFormat = this.toFlexibleFormat()
+        // Keep original category names
+        return flexibleFormat
     }
-    
-    /**
-     * Get all prompt texts (backward compatibility)
-     */
-    suspend fun getAllPromptTexts(context: Context): List<String> {
-        val flexiblePrompts = loadPrompts(context)
-        val allPrompts = mutableListOf<String>()
+
+    fun savePrompts(context: Context, promptsData: FlexiblePromptsData) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val gson = Gson()
+        val json = gson.toJson(promptsData.prompts)
         
-        flexiblePrompts.prompts.forEach { (_, prompts) ->
-            prompts.forEach { prompt ->
-                allPrompts.add(prompt.prompt)
-            }
-        }
+        prefs.edit()
+            .putString(KEY_CUSTOM_PROMPTS, json)
+            .remove(KEY_MULTI_PERSON_PROMPTS)
+            .apply()
         
-        return allPrompts
+        clearCache()
+        cachedMultiPersonPrompts = null
     }
-    
-    /**
-     * Get category names
-     */
+
+    // Store mapping of display names to raw category names
+    private val displayToRawCategory = mutableMapOf<String, String>()
+
     suspend fun getCategoryNames(context: Context): List<String> {
         val flexiblePrompts = loadPrompts(context)
-        android.util.Log.d("PromptsLoader", "Getting category names, available categories: ${flexiblePrompts.prompts.keys}")
-        return flexiblePrompts.prompts.keys.map { category ->
-            // Convert internal names to display names
-            when (category) {
-                "movie_tv" -> "Movie/TV"
-                "face_paint" -> "Face Paint"
-                "ghost_monster" -> "Ghost/Monster"
-                else -> category.replaceFirstChar { it.uppercase() }
+        displayToRawCategory.clear() // Reset mapping
+        android.util.Log.d("PromptsLoader", "Original category names: ${flexiblePrompts.prompts.keys}")
+        return flexiblePrompts.prompts.keys
+            .map { category ->
+                val displayName = formatCategoryForDisplay(category)
+                android.util.Log.d("PromptsLoader", "Mapping '$category' to display name '$displayName'")
+                displayToRawCategory[displayName] = category
+                displayName
             }
-        }.sorted().also {
-            android.util.Log.d("PromptsLoader", "Returning category names: $it")
-        }
+            .sorted()
+            .also { 
+                android.util.Log.d("PromptsLoader", "Final category mapping: $displayToRawCategory")
+            }
     }
-    
-    /**
-     * Get prompts for category (backward compatibility)
-     */
-    suspend fun getPromptsForCategory(context: Context, categoryName: String): List<PromptCategory> {
+
+    // Get raw category name from display name
+    private fun getRawCategory(displayName: String): String {
+        val fromMapping = displayToRawCategory[displayName]
+        if (fromMapping == null) {
+            android.util.Log.d("PromptsLoader", "No mapping found for display name '$displayName', using storage format")
+            val storageFormat = formatDisplayToStorage(displayName)
+            android.util.Log.d("PromptsLoader", "Converted '$displayName' to storage format '$storageFormat'")
+            return storageFormat
+        }
+        android.util.Log.d("PromptsLoader", "Found mapping for '$displayName': '$fromMapping'")
+        return fromMapping
+    }
+
+    suspend fun getPromptsForCategory(context: Context, displayCategoryName: String): List<PromptCategory> {
         val flexiblePrompts = loadPrompts(context)
+        val rawCategoryName = getRawCategory(displayCategoryName)
+        android.util.Log.d("PromptsLoader", "Looking up prompts for display category '$displayCategoryName', raw category '$rawCategoryName'")
+        android.util.Log.d("PromptsLoader", "Available categories: ${flexiblePrompts.prompts.keys}")
         
-        android.util.Log.d("PromptsLoader", "Getting prompts for category: $categoryName")
-        val internalName = normalizeCategory(categoryName)
-        android.util.Log.d("PromptsLoader", "Using internal name: $internalName")
-        
-        val prompts = flexiblePrompts.prompts[internalName] ?: emptyList()
-        android.util.Log.d("PromptsLoader", "Found ${prompts.size} prompts for category $internalName")
-        
+        val prompts = flexiblePrompts.prompts[rawCategoryName] ?: run {
+            // Try original name as fallback
+            android.util.Log.d("PromptsLoader", "No prompts found for raw category, trying original name")
+            flexiblePrompts.prompts[displayCategoryName] ?: emptyList()
+        }
         return prompts.map { PromptCategory(it.name, it.prompt) }
     }
-    
-    /**
-     * Get prompts for category in new format
-     */
-    suspend fun getPromptsForCategoryNew(context: Context, categoryName: String): List<PromptsData.Prompt> {
-        val flexiblePrompts = loadPrompts(context)
-        
-        android.util.Log.d("PromptsLoader", "Getting prompts for category (new): $categoryName")
-        val internalName = normalizeCategory(categoryName)
-        android.util.Log.d("PromptsLoader", "Using internal name (new): $internalName")
-        
-        val prompts = flexiblePrompts.prompts[internalName] ?: emptyList()
-        android.util.Log.d("PromptsLoader", "Found ${prompts.size} prompts for category $internalName (new)")
-        
-        return prompts
-    }
-    
-    /**
-     * Get base prompt for OpenAI API calls
-     */
-    fun getBasePrompt(context: Context): String {
-        cachedBasePrompt?.let { return it }
-        
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val basePrompt = prefs.getString(KEY_BASE_PROMPT, DEFAULT_BASE_PROMPT) ?: DEFAULT_BASE_PROMPT
-        
-        cachedBasePrompt = basePrompt
-        return basePrompt
-    }
-    
-    /**
-     * Save base prompt to SharedPreferences
-     */
-    fun saveBasePrompt(context: Context, basePrompt: String) {
+
+    fun clearMultiPersonPrompts(context: Context, forceRegenerate: Boolean = false) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
-            .putString(KEY_BASE_PROMPT, basePrompt)
+            .remove(KEY_MULTI_PERSON_PROMPTS)
             .apply()
-        
-        // Clear cache so next load will use updated data
+        cachedMultiPersonPrompts = null
+        generationInProgress = false
+        updateProgress(1f)
+        android.util.Log.d("PromptsLoader", "Multi-person prompts cache cleared (force regenerate: $forceRegenerate)")
+    }
+
+    fun clearCache() {
+        cachedPromptsData = null
+        cachedFlexiblePrompts = null
         cachedBasePrompt = null
-    }
-    
-    /**
-     * Get downsize images preference
-     */
-    fun getDownsizeImages(context: Context): Boolean {
-        cachedDownsizeImages?.let { return it }
-        
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val downsizeImages = prefs.getBoolean(KEY_DOWNSIZE_IMAGES, true) // Default to true for backward compatibility
-        
-        cachedDownsizeImages = downsizeImages
-        return downsizeImages
-    }
-    
-    /**
-     * Save downsize images preference to SharedPreferences
-     */
-    fun saveDownsizeImages(context: Context, downsizeImages: Boolean) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putBoolean(KEY_DOWNSIZE_IMAGES, downsizeImages)
-            .apply()
-        
-        // Clear cache so next load will use updated data
         cachedDownsizeImages = null
-    }
-    
-    /**
-     * Get input fidelity preference
-     */
-    fun getInputFidelity(context: Context): String {
-        cachedInputFidelity?.let { return it }
-        
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val inputFidelity = prefs.getString(KEY_INPUT_FIDELITY, "low") ?: "low" // Default to "low"
-        
-        cachedInputFidelity = inputFidelity
-        return inputFidelity
-    }
-    
-    /**
-     * Save input fidelity preference to SharedPreferences
-     */
-    fun saveInputFidelity(context: Context, inputFidelity: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString(KEY_INPUT_FIDELITY, inputFidelity)
-            .apply()
-        
-        // Clear cache so next load will use updated data
         cachedInputFidelity = null
-    }
-    
-    /**
-     * Get quality preference
-     */
-    fun getQuality(context: Context): String {
-        cachedQuality?.let { return it }
-        
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val quality = prefs.getString(KEY_QUALITY, "low") ?: "low" // Default to "low"
-        
-        cachedQuality = quality
-        return quality
-    }
-    
-    /**
-     * Save quality preference to SharedPreferences
-     */
-    fun saveQuality(context: Context, quality: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString(KEY_QUALITY, quality)
-            .apply()
-        
-        // Clear cache so next load will use updated data
         cachedQuality = null
     }
-    
-    /**
-     * Reset to default prompts
-     */
+
+    fun clearDeviceCache(context: Context) {
+        // Clear SharedPreferences
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().clear().apply()
+
+        // Clear in-memory caches
+        cachedPromptsData = null
+        cachedFlexiblePrompts = null
+        cachedBasePrompt = null
+        cachedDownsizeImages = null
+        cachedInputFidelity = null
+        cachedQuality = null
+        cachedMultiPersonPrompts = null
+
+        // Reset generation state
+        generationInProgress = false
+        updateProgress(1f)
+
+        // Clear app cache directory
+        try {
+            context.cacheDir.deleteRecursively()
+        } catch (e: Exception) {
+            android.util.Log.e("PromptsLoader", "Error clearing cache directory: ${e.message}")
+        }
+
+        android.util.Log.d("PromptsLoader", "Device cache cleared successfully")
+    }
+
     fun resetToDefaults(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
@@ -433,43 +513,12 @@ Prompt:
             .remove(KEY_DOWNSIZE_IMAGES)
             .remove(KEY_INPUT_FIDELITY)
             .remove(KEY_QUALITY)
-            .remove(KEY_MULTI_PERSON_PROMPTS) // Also clear multi-person prompts
-            .apply()
-        
-        // Clear caches
-        cachedFlexiblePrompts = null
-        cachedPromptsData = null
-        cachedBasePrompt = null
-        cachedDownsizeImages = null
-        cachedInputFidelity = null
-        cachedQuality = null
-        cachedMultiPersonPrompts = null
-    }
-    
-    /**
-     * Clear only the multi-person prompts cache, forcing regeneration
-     */
-    fun clearMultiPersonPrompts(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit()
             .remove(KEY_MULTI_PERSON_PROMPTS)
             .apply()
-            
-        // Clear only the multi-person prompts cache
-        cachedMultiPersonPrompts = null
         
-        android.util.Log.d("PromptsLoader", "Multi-person prompts cache cleared")
-    }
-    
-    /**
-     * Clear cache if needed (useful for testing or if data changes)
-     */
-    fun clearCache() {
-        cachedPromptsData = null
-        cachedFlexiblePrompts = null
-        cachedBasePrompt = null
-        cachedDownsizeImages = null
-        cachedInputFidelity = null
-        cachedQuality = null
+        clearCache()
+        cachedMultiPersonPrompts = null
+        generationInProgress = false
+        updateProgress(1f)
     }
 }

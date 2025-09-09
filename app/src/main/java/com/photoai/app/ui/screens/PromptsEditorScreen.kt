@@ -189,11 +189,24 @@ fun PromptsEditorScreen(
                         categoryPrompts[selectedPromptIndex] = updatedPrompt
                     }
                     
-                    val updatedPrompts = prompts.toMutableMap().apply {
-                        this[selectedCategory] = categoryPrompts
+                val updatedPrompts = prompts.toMutableMap().apply {
+                    this[selectedCategory] = categoryPrompts
+                }
+                prompts = updatedPrompts
+                
+                // First clear cache and force regeneration, then save new prompts
+                PromptsLoader.clearMultiPersonPrompts(context)
+                PromptsLoader.savePrompts(context, FlexiblePromptsData(updatedPrompts))
+                
+                // Force regeneration of prompts in case we have an active multi-person image
+                coroutineScope.launch {
+                    try {
+                        PromptsLoader.loadPrompts(context, forceRegenerate = true, ignoreCacheExpiry = true)
+                        android.util.Log.d("PromptsEditor", "Successfully regenerated prompts after edit")
+                    } catch (e: Exception) {
+                        android.util.Log.e("PromptsEditor", "Failed to regenerate prompts after edit: ${e.message}")
                     }
-                    prompts = updatedPrompts
-                    PromptsLoader.savePrompts(context, FlexiblePromptsData(updatedPrompts))
+                }
                     showEditPromptDialog = false
                 }
             }

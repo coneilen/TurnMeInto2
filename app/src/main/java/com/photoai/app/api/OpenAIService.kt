@@ -3,6 +3,7 @@ package com.photoai.app.api
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.PowerManager
 import android.net.Uri
 import com.google.gson.annotations.SerializedName
 import com.photoai.app.BuildConfig
@@ -45,7 +46,7 @@ data class Message(
 )
 
 data class ChatRequest(
-    @SerializedName("model") val model: String = "gpt-4",
+    @SerializedName("model") val model: String = "gpt-4o",
     @SerializedName("messages") val messages: List<ChatMessage>,
     @SerializedName("max_tokens") val maxTokens: Int = 300,
     @SerializedName("temperature") val temperature: Double = 0.7
@@ -137,8 +138,17 @@ interface OpenAIApi {
 }
 
 class OpenAIService {
-    suspend fun generateMultiPersonPrompt(prompt: String): Result<String> {
+    suspend fun generateMultiPersonPrompt(context: Context, prompt: String): Result<String> {
         android.util.Log.d("OpenAIService", "Generating multi-person prompt for: $prompt")
+        
+        // Acquire wake lock for the duration of the API call
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,
+            "PhotoAI:MultiPersonPrompt"
+        ).apply {
+            acquire(15 * 60 * 1000L) // 15 minutes max
+        }
         return try {
             if (BuildConfig.OPENAI_API_KEY.isBlank()) {
                 return Result.failure(Exception("OpenAI API key not configured"))
@@ -155,7 +165,7 @@ class OpenAIService {
             android.util.Log.d("OpenAIService", "Cache miss, generating new prompt")
 
             val request = ChatRequest(
-                model = "gpt-4",
+                model = "gpt-4o",
                 messages = listOf(
                     ChatMessage(
                         role = "system",
@@ -184,21 +194,36 @@ class OpenAIService {
                     promptGenerationCache[prompt] = Pair(multiPersonPrompt, now)
                 }
                 android.util.Log.d("OpenAIService", "Successfully generated and cached multi-person prompt")
+                try {
+                    wakeLock.release()
+                } catch (e: Exception) {
+                    android.util.Log.e("OpenAIService", "Error releasing wake lock: ${e.message}")
+                }
                 Result.success(multiPersonPrompt)
             } else {
                 val errorBody = response.errorBody()?.string() ?: "Unknown error"
                 android.util.Log.e("OpenAIService", "API Error: ${response.code()} ${response.message()} - $errorBody")
+                try {
+                    wakeLock.release()
+                } catch (e: Exception) {
+                    android.util.Log.e("OpenAIService", "Error releasing wake lock: ${e.message}")
+                }
                 Result.failure(Exception("Failed to generate multi-person prompt: $errorBody"))
             }
         } catch (e: Exception) {
             android.util.Log.e("OpenAIService", "Error generating multi-person prompt", e)
+            try {
+                wakeLock.release()
+            } catch (ex: Exception) {
+                android.util.Log.e("OpenAIService", "Error releasing wake lock: ${ex.message}")
+            }
             Result.failure(e)
         }
     }
 
     private val personCountCache = mutableMapOf<String, Pair<Int, Long>>()
     private val promptGenerationCache = mutableMapOf<String, Pair<String, Long>>()
-    private val CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000L // 24 hours
+    private val CACHE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000L // 7 days
 
     // System prompt for generating multi-person prompts
     private val MULTI_PERSON_SYSTEM_PROMPT = """

@@ -233,8 +233,8 @@ fun EditScreen(
                                 }
                             }
                             
-                            // Loading overlay (person counting or prompt generation)
-                            if (viewModel.isLoadingPersonCount.value || viewModel.isGeneratingPrompts.value) {
+                            // Loading overlay (person counting, prompt generation, or multi-person prompts)
+                            if (viewModel.isLoadingPersonCount.value || viewModel.isGeneratingPrompts.value || viewModel.isGeneratingMultiPersonPrompts.value) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -254,16 +254,42 @@ fun EditScreen(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             verticalArrangement = Arrangement.spacedBy(16.dp)
                                         ) {
-                                            CircularProgressIndicator(
-                                                color = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(48.dp),
-                                                strokeWidth = 4.dp
-                                            )
-                                            Text(
-                                                text = viewModel.loadingMessage.value ?: "Processing...",
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
+                                            if (viewModel.isGeneratingMultiPersonPrompts.value) {
+                                                // Progress indicator for multi-person prompts
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        progress = viewModel.promptGenerationProgress.value,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(48.dp),
+                                                        strokeWidth = 4.dp
+                                                    )
+                                                    Text(
+                                                        text = "Generating multi-person prompts...",
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Text(
+                                                        text = "${(viewModel.promptGenerationProgress.value * 100).toInt()}%",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            } else {
+                                                // Standard loading indicator
+                                                CircularProgressIndicator(
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(48.dp),
+                                                    strokeWidth = 4.dp
+                                                )
+                                                Text(
+                                                    text = viewModel.loadingMessage.value ?: "Processing...",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
                                     }
                                 }
