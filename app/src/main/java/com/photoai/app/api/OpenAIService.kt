@@ -259,6 +259,10 @@ class OpenAIService {
             .build()
             .create(OpenAIApi::class.java)
     }
+
+    // Prefix applied only when re-editing an already edited image to constrain changes
+    private val EDITED_IMAGE_PROMPT_PREFIX =
+        "Only apply the edits to the image in the given prompt. Do not make any other changes. Do not modify the brightness of the original image. Prompt: "
     
     private fun resizeBitmapToHalf(bitmap: Bitmap): Bitmap {
         val newWidth = bitmap.width / 2
@@ -383,13 +387,22 @@ class OpenAIService {
                 val imageRequestBody = pngByteArray.toRequestBody("image/png".toMediaType())
                 val imagePart = MultipartBody.Part.createFormData("image", "image.png", imageRequestBody)
                 
-                // Get editable base prompt from PromptsLoader only if not editing an edited image
+                // Build full prompt (apply safeguard prefix when editing an already edited image)
                 val fullPrompt = if (isEditingEditedImage) {
-                    prompt  // Use just the prompt without base prompt for edited images
+                    if (prompt.startsWith(EDITED_IMAGE_PROMPT_PREFIX)) {
+                        prompt
+                    } else {
+                        EDITED_IMAGE_PROMPT_PREFIX + prompt
+                    }
                 } else {
                     val basePrompt = PromptsLoader.getBasePrompt(context)
-                    basePrompt + prompt  // Use base prompt + user prompt for original image
+                    basePrompt + prompt
                 }
+
+                android.util.Log.d(
+                    "OpenAIService",
+                    "Prepared prompt (edited=$isEditingEditedImage, length=${fullPrompt.length}): ${fullPrompt.take(140)}"
+                )
                 
                 val promptBody = fullPrompt.toRequestBody("text/plain".toMediaType())
                 // Note: Using "gpt-image-1" as specified. Standard OpenAI image editing typically uses "dall-e-2"

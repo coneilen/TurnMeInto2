@@ -19,10 +19,13 @@ object PromptsLoader {
     private const val KEY_MULTI_PERSON_PROMPTS = "multi_person_prompts"
 
     private const val DEFAULT_BASE_PROMPT = """Use the following prompt to edit the provided image.
-The generated image should maintain the facial features and build of the person so they are easily recognizable.
+The generated image should maintain the facial features. hair color and build of the person so they are easily recognizable.
 You should keep any eye glasses the person is wearing, but do not add them if they are not already wearing them.
 Maintain the color and lighting of the scene.
 The generated image should be photorealistic.
+Only apply the edits to the image in the given prompt. 
+Do not make any other changes. 
+Do not modify the brightness of the original image.
 Prompt: 
 """
     

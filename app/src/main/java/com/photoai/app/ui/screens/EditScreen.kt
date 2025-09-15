@@ -82,12 +82,15 @@ fun EditScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel.errorMessage.value) {
-        viewModel.errorMessage.value?.let {
-            snackbarHostState.showSnackbar(
-                message = it,
-                duration = SnackbarDuration.Short
+        viewModel.errorMessage.value?.let { msg ->
+            val result = snackbarHostState.showSnackbar(
+                message = msg,
+                actionLabel = "Dismiss",
+                duration = SnackbarDuration.Indefinite
             )
-            viewModel.clearError()
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.clearError()
+            }
         }
     }
 
