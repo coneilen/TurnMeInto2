@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import kotlin.math.roundToInt
 
 // Available chat commands with descriptions
 data class CommandSuggestion(
@@ -539,7 +540,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 isProcessing.value = true
-                errorMessage.value = null
+                // Preserve existing error message until user explicitly dismisses it
+                // Capture original/base image dimensions (used for upscaling edited result)
+                val baseDimensions = getImageDimensions(context, uri)
 
                 // Acquire wake lock to prevent screen from sleeping
                 acquireWakeLock(context)
@@ -573,7 +576,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         // If it's a data URL, convert it to a temporary file for better Coil compatibility
                         if (imageUrl.startsWith("data:image/")) {
                             viewModelScope.launch {
-                                val tempFileUri = convertDataUrlToTempFile(context, imageUrl)
+                                val tempFileUri = convertDataUrlToTempFile(
+                                    context = context,
+                                    dataUrl = imageUrl,
+                                    targetWidth = baseDimensions?.first,
+                                    targetHeight = baseDimensions?.second
+                                )
                                 val finalUriStr = tempFileUri?.toString() ?: imageUrl
                                 appendNewEditedImage(finalUriStr)
                             }
@@ -642,23 +650,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun convertDataUrlToTempFile(context: Context, dataUrl: String): Uri? {
+    private suspend fun convertDataUrlToTempFile(
+        context: Context,
+        dataUrl: String,
+        targetWidth: Int? = null,
+        targetHeight: Int? = null
+    ): Uri? {
         return withContext(Dispatchers.IO) {
             try {
-                // Extract base64 data
                 val base64Data = dataUrl.substringAfter("base64,")
                 val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                var bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
 
                 if (bitmap != null) {
-                    // Create temporary file
-                    val tempFile = File(context.cacheDir, "temp_edited_${System.currentTimeMillis()}.png")
-                    val outputStream = FileOutputStream(tempFile)
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-                    outputStream.close()
-                    bitmap.recycle()
+                    // Attempt upscale if original/base dimensions are larger
+                    if (targetWidth != null && targetHeight != null) {
+                        val upscaled = upscaleMultiStepSharpen(bitmap, targetWidth, targetHeight)
+                        if (upscaled != bitmap) {
+                            bitmap.recycle()
+                            bitmap = upscaled
+                        }
+                    }
 
-                    android.util.Log.d("MainViewModel", "Created temp file: ${tempFile.absolutePath}")
+                    val tempFile = File(context.cacheDir, "temp_edited_${System.currentTimeMillis()}.png")
+                    FileOutputStream(tempFile).use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                    bitmap.recycle()
+                    android.util.Log.d("MainViewModel", "Created temp file (possibly upscaled): ${tempFile.absolutePath}")
                     Uri.fromFile(tempFile)
                 } else {
                     android.util.Log.e("MainViewModel", "Failed to decode bitmap from data URL")
@@ -668,6 +687,238 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 android.util.Log.e("MainViewModel", "Error converting data URL to temp file: ${e.message}")
                 null
             }
+        }
+    }
+
+    /**
+     * Multi-step upscale with denoise + unsharp mask to improve perceived detail.
+     * Pipeline:
+     * 0. Adaptive noise estimation; if noisy, apply median-based denoise (edge-preserving).
+     * 1. Only upscale if both dimensions are below original and scale factor > 1.05.
+     * 2. Progressive 2x steps to reduce interpolation artifacts before final resize.
+     * 3. Unsharp mask restores micro-contrast after denoise + scaling.
+     */
+    private fun upscaleMultiStepSharpen(edited: Bitmap, origW: Int, origH: Int): Bitmap {
+        // Optional denoise first
+        val source = denoiseIfNoisy(edited)
+        val eW = source.width
+        val eH = source.height
+        if (eW >= origW || eH >= origH) return source
+
+        val scale = minOf(origW.toFloat() / eW.toFloat(), origH.toFloat() / eH.toFloat())
+        if (scale <= 1.05f) return source // negligible gain
+
+        val targetW = (eW * scale).roundToInt().coerceAtMost(origW)
+        val targetH = (eH * scale).roundToInt().coerceAtMost(origH)
+
+        var current = source
+        var currentW = eW
+        var currentH = eH
+
+        // Progressive doubling until close to target
+        while (currentW * 2 < targetW && currentH * 2 < targetH) {
+            val nextW = (currentW * 2).coerceAtMost(targetW)
+            val nextH = (currentH * 2).coerceAtMost(targetH)
+            val step = Bitmap.createScaledBitmap(current, nextW, nextH, true)
+            if (current != source) current.recycle()
+            current = step
+            currentW = nextW
+            currentH = nextH
+        }
+
+        // Final non-doubling step if needed
+        if (currentW != targetW || currentH != targetH) {
+            val finalStep = Bitmap.createScaledBitmap(current, targetW, targetH, true)
+            if (current != source) current.recycle()
+            current = finalStep
+        }
+
+        android.util.Log.d(
+            "MainViewModel",
+            "Upscaled (denoise=${source != edited}) from ${eW}x${eH} to ${current.width}x${current.height} (orig ${origW}x${origH})"
+        )
+
+        val sharpened = applyUnsharpMask(current, amount = 0.35f)
+        if (sharpened != current) current.recycle()
+        return sharpened
+    }
+
+    /**
+     * Decide if denoising is needed via a lightweight noise metric on luma differences.
+     */
+    private fun denoiseIfNoisy(src: Bitmap): Bitmap {
+        val noise = estimateNoiseLuma(src)
+        // Threshold empirically chosen; typical clean AI images < 5, noisy > 8-10
+        return if (noise >= 8f) {
+            android.util.Log.d("MainViewModel", "Denoising edited image before upscale (noise=$noise)")
+            medianDenoise3x3(src)
+        } else {
+            android.util.Log.d("MainViewModel", "Skipping denoise (noise=$noise)")
+            src
+        }
+    }
+
+    /**
+     * Estimate noise by sampling a grid and averaging absolute luma diffs to right & bottom neighbors.
+     */
+    private fun estimateNoiseLuma(bmp: Bitmap): Float {
+        val w = bmp.width
+        val h = bmp.height
+        if (w < 4 || h < 4) return 0f
+        val stepX = (w / 32).coerceAtLeast(1)
+        val stepY = (h / 32).coerceAtLeast(1)
+        var acc = 0f
+        var count = 0
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        for (y in 1 until h - 1 step stepY) {
+            for (x in 1 until w - 1 step stepX) {
+                val c = pixels[y * w + x]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val l = (299 * r + 587 * g + 114 * b) / 1000
+                val cR = pixels[y * w + (x + 1)]
+                val cD = pixels[(y + 1) * w + x]
+                val lR = (299 * ((cR shr 16) and 0xFF) + 587 * ((cR shr 8) and 0xFF) + 114 * (cR and 0xFF)) / 1000
+                val lD = (299 * ((cD shr 16) and 0xFF) + 587 * ((cD shr 8) and 0xFF) + 114 * (cD and 0xFF)) / 1000
+                acc += kotlin.math.abs(l - lR) + kotlin.math.abs(l - lD)
+                count += 2
+            }
+        }
+        return if (count == 0) 0f else acc / count
+    }
+
+    /**
+     * 3x3 median denoise per channel (edges preserved). Returns a new Bitmap if applied.
+     */
+    private fun medianDenoise3x3(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(w * h)
+        src.getPixels(pixels, 0, w, 0, 0, w, h)
+        val result = IntArray(w * h)
+
+        // Copy borders directly
+        for (x in 0 until w) {
+            result[x] = pixels[x]
+            result[(h - 1) * w + x] = pixels[(h - 1) * w + x]
+        }
+        for (y in 0 until h) {
+            result[y * w] = pixels[y * w]
+            result[y * w + (w - 1)] = pixels[y * w + (w - 1)]
+        }
+
+        val rArr = IntArray(9)
+        val gArr = IntArray(9)
+        val bArr = IntArray(9)
+
+        fun median9(a: IntArray): Int {
+            // In-place partial selection (simple insertion sort; N=9 negligible)
+            for (i in 1 until 9) {
+                val v = a[i]
+                var j = i - 1
+                while (j >= 0 && a[j] > v) {
+                    a[j + 1] = a[j]
+                    j--
+                }
+                a[j + 1] = v
+            }
+            return a[4]
+        }
+
+        for (y in 1 until h - 1) {
+            for (x in 1 until w - 1) {
+                var idx = 0
+                for (dy in -1..1) {
+                    val row = (y + dy) * w
+                    for (dx in -1..1) {
+                        val c = pixels[row + (x + dx)]
+                        rArr[idx] = (c shr 16) and 0xFF
+                        gArr[idx] = (c shr 8) and 0xFF
+                        bArr[idx] = c and 0xFF
+                        idx++
+                    }
+                }
+                val mr = median9(rArr)
+                val mg = median9(gArr)
+                val mb = median9(bArr)
+                result[y * w + x] = (0xFF shl 24) or (mr shl 16) or (mg shl 8) or mb
+            }
+        }
+
+        out.setPixels(result, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    /**
+     * Simple unsharp mask: blur (3x3 box) then combine:
+     * result = original * (1 + amount) - blur * amount
+     */
+    private fun applyUnsharpMask(src: Bitmap, amount: Float = 0.3f): Bitmap {
+        val w = src.width
+        val h = src.height
+        val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        val original = IntArray(w * h)
+        val blur = IntArray(w * h)
+        out.getPixels(original, 0, w, 0, 0, w, h)
+
+        // 3x3 box blur (skip outer border)
+        for (y in 1 until h - 1) {
+            for (x in 1 until w - 1) {
+                var r = 0; var g = 0; var b = 0
+                for (dy in -1..1) {
+                    val row = (y + dy) * w
+                    for (dx in -1..1) {
+                        val c = original[row + (x + dx)]
+                        r += (c shr 16) and 0xFF
+                        g += (c shr 8) and 0xFF
+                        b += c and 0xFF
+                    }
+                }
+                val idx = y * w + x
+                blur[idx] = (0xFF shl 24) or
+                    ((r / 9) shl 16) or
+                    ((g / 9) shl 8) or
+                    (b / 9)
+            }
+        }
+
+        // Unsharp combine
+        for (i in original.indices) {
+            val o = original[i]
+            val bpx = blur[i]
+            val orr = (o shr 16) and 0xFF
+            val org = (o shr 8) and 0xFF
+            val orb = o and 0xFF
+            val br = (bpx shr 16) and 0xFF
+            val bg = (bpx shr 8) and 0xFF
+            val bb = bpx and 0xFF
+            val nr = (orr * (1 + amount) - br * amount).coerceIn(0f, 255f).toInt()
+            val ng = (org * (1 + amount) - bg * amount).coerceIn(0f, 255f).toInt()
+            val nb = (orb * (1 + amount) - bb * amount).coerceIn(0f, 255f).toInt()
+            original[i] = (0xFF shl 24) or (nr shl 16) or (ng shl 8) or nb
+        }
+        out.setPixels(original, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    /**
+     * Efficiently get intrinsic image dimensions without fully decoding bitmap.
+     */
+    private fun getImageDimensions(context: Context, uri: Uri): Pair<Int, Int>? {
+        return try {
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, opts)
+            }
+            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                Pair(opts.outWidth, opts.outHeight)
+            } else null
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to read image dimensions: ${e.message}")
+            null
         }
     }
 
