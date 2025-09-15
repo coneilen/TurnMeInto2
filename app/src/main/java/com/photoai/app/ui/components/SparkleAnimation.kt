@@ -1,6 +1,5 @@
 package com.photoai.app.ui.components
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -71,6 +70,7 @@ private fun drawStar(
         )
     }
 
+
     path.close()
 
     drawScope.drawPath(
@@ -78,6 +78,11 @@ private fun drawStar(
         color = color.copy(alpha = alpha),
         style = androidx.compose.ui.graphics.drawscope.Fill
     )
+}
+
+private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
 }
 
 @Composable
@@ -134,28 +139,20 @@ Star(
         }
     }
 
-    val transition = rememberInfiniteTransition(label = "nebulaStars")
-    // Master time progress 0..1 repeating
-    val time = transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4667, easing = LinearEasing), // +20% additional speed (5600->4667, original 8000)
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "time"
-    )
-
-    // Secondary cycle for subtle pulsing
-    val pulse = transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4083, easing = LinearEasing), // +20% additional speed (4900->4083, original 7000)
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulse"
-    )
+    // Continuous, non-resetting time (seconds)
+    var baseTime by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        withFrameNanos { last = it }
+        while (true) {
+            withFrameNanos { now ->
+                val dt = (now - last) / 1_000_000_000f
+                last = now
+                // Avoid Float overflow for very long sessions (wrap but smooth)
+                baseTime = (baseTime + dt) % 10_000f
+            }
+        }
+    }
 
     Canvas(modifier = modifier) {
         val canvasWidth = size.width
@@ -163,9 +160,11 @@ Star(
 
         // Draw nebulas first (soft clouds)
         nebulas.forEachIndexed { index, n ->
-            val driftProgress = (time.value + index * 0.1f) % 1f
-            val dx = n.driftX * (driftProgress - 0.5f)
-            val dy = n.driftY * (driftProgress - 0.5f)
+            // Very slow 30s drift cycle
+            val driftPhase = ((baseTime / 30f) + index * 0.1f) % 1f
+            val dx = n.driftX * (driftPhase - 0.5f)
+            val dy = n.driftY * (driftPhase - 0.5f)
+            val pulsePhase = (baseTime / 4.083f) % 1f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = n.colors,
@@ -180,36 +179,31 @@ Star(
                     y = n.y * canvasHeight + dy
                 ),
                 radius = n.radius,
-                alpha = n.alpha * (0.8f + 0.2f * kotlin.math.sin(pulse.value * 2 * Math.PI).toFloat())
+                alpha = n.alpha * (0.8f + 0.2f * kotlin.math.sin(pulsePhase * 2 * Math.PI).toFloat())
             )
         }
 
         // Sort stars so back layer draws first
         stars.forEach { star ->
-            val progress = (time.value * star.speed + star.phaseOffset) % 1f
+            val progress = ((baseTime * star.speed) + star.phaseOffset) % 1f
 
-            // Nebula style lifecycle:
-            // 0.0 - 0.15 fade in, 0.15 - 0.6 grow & bright, 0.6 - 1.0 fade out & shrink slightly
-            val fadeIn = when {
-                progress < 0.15f -> (progress / 0.15f)
-                progress < 0.6f -> 1f
-                else -> 1f - ((progress - 0.6f) / 0.4f)
-            }
-            val sizeFactor = when {
-                progress < 0.6f -> 0.3f + (progress / 0.6f) * 1.7f  // grow to 2x
-                else -> 2f - ((progress - 0.6f) / 0.4f) * 0.6f      // shrink a bit near end
-            }
+            // Smooth lifecycle (fade in / hold / fade out)
+            val fade = smoothstep(0f, 0.12f, progress) * (1f - smoothstep(0.70f, 1f, progress))
+            val growth = smoothstep(0f, 0.55f, progress)
+            val shrinkMod = 1f - smoothstep(0.65f, 1f, progress) * 0.3f
+            val sizeFactor = 0.4f + growth * 1.6f * shrinkMod
 
             val layerAlpha = if (star.layer == 0) 0.25f else 0.55f
-            val alpha = fadeIn * layerAlpha
+            val twinkle = 0.85f + 0.15f * kotlin.math.sin((baseTime * 0.8f + star.phaseOffset) * 2 * Math.PI).toFloat()
+            val alpha = fade * layerAlpha * twinkle
 
-            // Parallax horizontal drift & subtle vertical shimmer
+            // Continuous parallax drift (px/s approximated from previous cycle-based speeds)
             val parallaxX = if (star.layer == 0) {
-                (time.value * 25f) % canvasWidth
+                (baseTime * 5.36f) % canvasWidth
             } else {
-                (-time.value * 40f) % canvasWidth
+                (-baseTime * 8.57f) % canvasWidth
             }
-            val shimmerY = kotlin.math.sin((time.value + star.phaseOffset) * 6 * Math.PI).toFloat() * (if (star.layer == 0) 4f else 7f)
+            val shimmerY = kotlin.math.sin((baseTime * 0.215f + star.phaseOffset) * 6 * Math.PI).toFloat() * (if (star.layer == 0) 4f else 7f)
 
             val centerX = (star.x * canvasWidth + parallaxX + canvasWidth) % canvasWidth
             val centerY = (star.y * canvasHeight + shimmerY + canvasHeight) % canvasHeight
