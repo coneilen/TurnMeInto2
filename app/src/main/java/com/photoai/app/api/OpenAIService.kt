@@ -293,6 +293,7 @@ class OpenAIService {
         // Force high quality settings when editing an edited image to prevent quality degradation
         val effectiveInputFidelity = if (isEditingEditedImage) "high" else inputFidelity
         val effectiveQuality = if (isEditingEditedImage) "high" else quality
+        val effectiveDownsizeImage = if (isEditingEditedImage) false else downsizeImage
         return withContext(Dispatchers.IO) {
             try {
                 if (BuildConfig.OPENAI_API_KEY.isBlank()) {
@@ -315,7 +316,7 @@ class OpenAIService {
                 }
                 
                 // Conditionally resize the bitmap based on downsizeImage parameter
-                val processedBitmap = if (downsizeImage) {
+                val processedBitmap = if (effectiveDownsizeImage) {
                     resizeBitmapToHalf(rgbaOriginalBitmap)
                 } else {
                     // If not downsizing, still ensure minimum size requirements
@@ -347,7 +348,7 @@ class OpenAIService {
                 
                 android.util.Log.d("OpenAIService", "Original size: ${rgbaOriginalBitmap.width}x${rgbaOriginalBitmap.height}")
                 android.util.Log.d("OpenAIService", "Processed size: ${processedBitmap.width}x${processedBitmap.height}")
-                android.util.Log.d("OpenAIService", "Downsize enabled: $downsizeImage")
+                android.util.Log.d("OpenAIService", "Downsize enabled: $effectiveDownsizeImage")
                 android.util.Log.d("OpenAIService", "Bitmap config: ${processedBitmap.config}")
                 
                 // Convert bitmap directly to PNG byte array to preserve RGBA
@@ -395,16 +396,16 @@ class OpenAIService {
                 val modelBody = "gpt-image-1".toRequestBody("text/plain".toMediaType())
                 val nBody = "1".toRequestBody("text/plain".toMediaType())
                 val sizeBody = when {
-                    processedBitmap.width > processedBitmap.height -> "1536x1024".toRequestBody("text/plain".toMediaType())
-                    processedBitmap.width < processedBitmap.height -> "1024x1536".toRequestBody("text/plain".toMediaType())
-                    else -> "1024x1024".toRequestBody("text/plain".toMediaType())
+                    processedBitmap.width > processedBitmap.height -> "1536x1024"
+                    processedBitmap.width < processedBitmap.height -> "1024x1536"
+                    else -> "1024x1024"
                 }
 
                 android.util.Log.d("OpenAIService", "Making API call with prompt: $prompt")
                 android.util.Log.d("OpenAIService", "Model: gpt-image-1")
-                android.util.Log.d("OpenAIService", "Input Fidelity: $inputFidelity")
-                android.util.Log.d("OpenAIService", "Quality: $quality")
-                android.util.Log.d("OpenAIService", "Size: ${if (processedBitmap.width > processedBitmap.height) "1536x1024" else if (processedBitmap.width < processedBitmap.height) "1024x1536" else "1024x1024"}")
+                android.util.Log.d("OpenAIService", "Input Fidelity: $effectiveInputFidelity")
+                android.util.Log.d("OpenAIService", "Quality: $effectiveQuality")
+                android.util.Log.d("OpenAIService", "Size: $sizeBody")
                 android.util.Log.d("OpenAIService", "Response format: b64_json")
                 
                 // Make API call
@@ -415,7 +416,7 @@ class OpenAIService {
                     prompt = promptBody,
                     model = modelBody,
                     n = nBody,
-                    size = sizeBody,
+                    size = sizeBody.toRequestBody("text/plain".toMediaType()),
                     user = null,
                     input_fidelity = effectiveInputFidelity.toRequestBody("text/plain".toMediaType()),
                     quality = effectiveQuality.toRequestBody("text/plain".toMediaType())

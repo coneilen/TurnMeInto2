@@ -964,7 +964,6 @@ fun MainScreen(
                         onClick = {
                             if (customPrompt.isNotBlank()) {
                                 // Use current image as input
-                                // Always use original image as input
                                 selectedImageUri?.let { uri ->
                                     viewModel.editImage(context, uri, customPrompt)
                                 }

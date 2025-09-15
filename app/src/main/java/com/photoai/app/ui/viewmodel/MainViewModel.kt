@@ -514,12 +514,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Set high quality settings for edited images to prevent quality degradation
                 val effectiveInputFidelity = if (isEditingEditedImage) "high" else inputFidelity.value
                 val effectiveQuality = if (isEditingEditedImage) "high" else quality.value
+                val effectiveDownsizeImage = if (isEditingEditedImage) false else downsizeImages.value
                 
                 val result = openAIService.editImage(
                     context = context,
                     uri = uri,
                     prompt = fullPrompt,
-                    downsizeImage = false, // Disable downsizing for edited images to preserve quality
+                    downsizeImage = effectiveDownsizeImage,
                     inputFidelity = effectiveInputFidelity,
                     quality = effectiveQuality,
                     isEditingEditedImage = isEditingEditedImage
