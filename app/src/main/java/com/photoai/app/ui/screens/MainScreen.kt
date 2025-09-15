@@ -172,7 +172,7 @@ fun MainScreen(
     // Observe ViewModel state
     val selectedImageUri by viewModel.selectedImageUri
     val customPrompt by viewModel.customPrompt
-    val editedImageUrl by viewModel.editedImageUrl
+    val editedImageUrls by viewModel.editedImageUrls
     val isProcessing by viewModel.isProcessing
     val errorMessage by viewModel.errorMessage
     val currentPage by viewModel.currentPage
@@ -218,68 +218,6 @@ fun MainScreen(
     
     LaunchedEffect(Unit) {
         categoryNames = PromptsLoader.getCategoryNames(context)
-    }
-    
-    // Share function
-    fun shareEditedImage() {
-        coroutineScope.launch {
-            try {
-                android.util.Log.d("MainScreen", "Starting share process...")
-                val bitmap = urlToBitmap(editedImageUrl!!)
-                bitmap?.let { bmp ->
-                    android.util.Log.d("MainScreen", "Bitmap converted successfully: ${bmp.width}x${bmp.height}")
-                    
-                    // Create a temporary file to share
-                    val shareFile = File(context.cacheDir, "shared_image_${System.currentTimeMillis()}.jpg")
-                    android.util.Log.d("MainScreen", "Creating share file: ${shareFile.absolutePath}")
-                    
-                    val fos = FileOutputStream(shareFile)
-                    val compressed = bmp.compress(Bitmap.CompressFormat.JPEG, 90, fos)
-                    fos.close()
-                    
-                    if (!compressed) {
-                        android.util.Log.e("MainScreen", "Failed to compress bitmap")
-                        return@let
-                    }
-                    
-                    android.util.Log.d("MainScreen", "File created successfully, size: ${shareFile.length()} bytes")
-                    
-                    // Create share intent
-                    val shareUri = FileProvider.getUriForFile(
-                        context,
-                        "${context.packageName}.fileprovider",
-                        shareFile
-                    )
-                    
-                    android.util.Log.d("MainScreen", "Share URI created: $shareUri")
-                    
-                    val shareIntent = Intent().apply {
-                        action = Intent.ACTION_SEND
-                        type = "image/jpeg"
-                        putExtra(Intent.EXTRA_STREAM, shareUri)
-                        putExtra(Intent.EXTRA_TEXT, "Check out my AI-edited photo from Photo AI Assistant!")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    
-                    // Verify that there are apps that can handle this intent
-                    val packageManager = context.packageManager
-                    val activities = packageManager.queryIntentActivities(shareIntent, 0)
-                    
-                    if (activities.isNotEmpty()) {
-                        android.util.Log.d("MainScreen", "Found ${activities.size} apps that can handle share intent")
-                        val chooserIntent = Intent.createChooser(shareIntent, "Share edited image")
-                        context.startActivity(chooserIntent)
-                    } else {
-                        android.util.Log.e("MainScreen", "No apps found that can handle share intent")
-                    }
-                } ?: run {
-                    android.util.Log.e("MainScreen", "Failed to convert URL to bitmap")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("MainScreen", "Error sharing image: ${e.message}", e)
-                // You could show a toast or error message here
-            }
-        }
     }
     
     // Show PromptsEditorScreen if editing prompts
@@ -444,8 +382,8 @@ fun MainScreen(
                             .padding(bottom = 16.dp)
                     )
                     
-                // Action buttons
-                if (editedImageUrl != null) {
+                // Action buttons (show when there is at least one edited image)
+                if (editedImageUrls.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -499,7 +437,7 @@ fun MainScreen(
                             .height(300.dp)
                     ) {
                         val pagerState = rememberPagerState(
-                            pageCount = { if (editedImageUrl != null) 2 else 1 }
+                            pageCount = { 1 + editedImageUrls.size }
                         )
                         
                         // Keep ViewModel's currentPage in sync with pager
@@ -528,7 +466,7 @@ fun MainScreen(
                             ) { page ->
                                 Image(
                                     painter = rememberAsyncImagePainter(
-                                        model = if (page == 0) uri else editedImageUrl,
+                                        model = if (page == 0) uri else editedImageUrls[page - 1],
                                         onError = { error ->
                                             android.util.Log.e("MainScreen", "Image loading error: ${error.result.throwable}")
                                         }
@@ -539,7 +477,7 @@ fun MainScreen(
                                 )
                             }
                             
-                            if (editedImageUrl != null) {
+                            if (editedImageUrls.isNotEmpty()) {
                                 Row(
                                     Modifier
                                         .align(Alignment.BottomCenter)
@@ -963,10 +901,7 @@ fun MainScreen(
                     Button(
                         onClick = {
                             if (customPrompt.isNotBlank()) {
-                                // Use current image as input
-                                selectedImageUri?.let { uri ->
-                                    viewModel.editImage(context, uri, customPrompt)
-                                }
+                                viewModel.editCurrentImage(context, customPrompt)
                             }
                         },
                         modifier = Modifier
@@ -1103,7 +1038,7 @@ fun MainScreen(
     if (viewModel.isFullScreenMode.value) {
         FullScreenImageDialog(
             originalUri = selectedImageUri!!,
-            editedUri = editedImageUrl?.let { Uri.parse(it) },
+            editedUris = editedImageUrls.map { Uri.parse(it) },
             onDismiss = { viewModel.toggleFullScreenMode() },
             currentPage = viewModel.currentPage.value,
             onPageChanged = { viewModel.setCurrentPage(it) }

@@ -24,7 +24,7 @@ import androidx.compose.foundation.pager.*
 @Composable
 fun FullScreenImageDialog(
     originalUri: Uri,
-    editedUri: Uri?,
+    editedUris: List<Uri>,
     onDismiss: () -> Unit,
     currentPage: Int,
     onPageChanged: (Int) -> Unit
@@ -44,7 +44,7 @@ fun FullScreenImageDialog(
         ) {
             val pagerState = rememberPagerState(
                 initialPage = currentPage,
-                pageCount = { if (editedUri != null) 2 else 1 }
+                pageCount = { 1 + editedUris.size }
             )
             
             // Keep parent pager in sync
@@ -58,7 +58,7 @@ fun FullScreenImageDialog(
             ) { page ->
                 Box(modifier = Modifier.fillMaxSize()) {
                     AsyncImage(
-                        model = if (page == 0) originalUri else editedUri,
+                        model = if (page == 0) originalUri else editedUris[page - 1],
                         contentDescription = if (page == 0) "Original image" else "Edited image",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit
@@ -85,7 +85,7 @@ fun FullScreenImageDialog(
             }
 
             // Page indicator if we have both images
-            if (editedUri != null) {
+            if (editedUris.isNotEmpty()) {
                 Row(
                     Modifier
                         .align(Alignment.BottomCenter)

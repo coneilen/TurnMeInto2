@@ -161,7 +161,7 @@ fun EditScreen(
 
                 // Image Preview with Pager (70% of remaining height)
                 val pagerState = rememberPagerState(
-                    pageCount = { if (viewModel.editedImageUrl.value != null) 2 else 1 }
+                    pageCount = { 1 + viewModel.editedImageUrls.value.size }
                 )
                 
                 Box(
@@ -175,10 +175,11 @@ fun EditScreen(
                         viewModel.setCurrentPage(pagerState.currentPage)
                     }
 
-                    // Ensure edited image is shown when OpenAI call returns
-                    LaunchedEffect(viewModel.editedImageUrl.value) {
-                        if (viewModel.editedImageUrl.value != null) {
-                            pagerState.animateScrollToPage(1)
+                    // Ensure newest edited image is shown when history changes
+                    LaunchedEffect(viewModel.editedImageUrls.value.size) {
+                        val size = viewModel.editedImageUrls.value.size
+                        if (size > 0) {
+                            pagerState.animateScrollToPage(size)
                         }
                     }
 
@@ -203,7 +204,7 @@ fun EditScreen(
                             ) { page ->
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     AsyncImage(
-                                        model = if (page == 0) imageUri else viewModel.editedImageUrl.value,
+                                        model = if (page == 0) imageUri else viewModel.editedImageUrls.value[page - 1],
                                         contentDescription = if (page == 0) "Original image" else "Edited image",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Fit
@@ -212,7 +213,7 @@ fun EditScreen(
                             }
 
                             // Add page indicator if we have both images
-                            if (viewModel.editedImageUrl.value != null) {
+                            if (viewModel.editedImageUrls.value.isNotEmpty()) {
                                 Row(
                                     Modifier
                                         .align(Alignment.BottomCenter)
@@ -307,7 +308,7 @@ fun EditScreen(
                 if (viewModel.isFullScreenMode.value) {
                     FullScreenImageDialog(
                         originalUri = imageUri,
-                        editedUri = viewModel.editedImageUrl.value?.let { Uri.parse(it) },
+                        editedUris = viewModel.editedImageUrls.value.map { Uri.parse(it) },
                         onDismiss = { viewModel.toggleFullScreenMode() },
                         currentPage = viewModel.currentPage.value,
                         onPageChanged = { viewModel.setCurrentPage(it) }
@@ -526,24 +527,7 @@ fun EditScreen(
                         FloatingActionButton(
                             onClick = {
                                 if (viewModel.customPrompt.value.isNotBlank() && !viewModel.isProcessing.value) {
-                                    // Use currently displayed image based on pager state
-                                    if (pagerState.currentPage == 0) {
-                                        viewModel.editImage(
-                                            context = context,
-                                            uri = imageUri,
-                                            prompt = viewModel.customPrompt.value,
-                                            isEditingEditedImage = false
-                                        )
-                                    } else {
-                                        viewModel.editedImageUrl.value?.let { editedUrl ->
-                                            viewModel.editImage(
-                                                context = context,
-                                                uri = Uri.parse(editedUrl),
-                                                prompt = viewModel.customPrompt.value,
-                                                isEditingEditedImage = true
-                                            )
-                                        }
-                                    }
+                                    viewModel.editCurrentImage(context, viewModel.customPrompt.value)
                                 }
                             },
                             containerColor = if (!viewModel.isProcessing.value && viewModel.customPrompt.value.isNotBlank())

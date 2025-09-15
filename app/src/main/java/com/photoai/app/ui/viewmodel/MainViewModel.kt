@@ -41,14 +41,14 @@ sealed class Screen {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val openAIService = OpenAIService.getInstance()
     private var wakeLock: PowerManager.WakeLock? = null
-    
+
     // New states for prompt generation tracking
     var promptGenerationProgress = mutableStateOf(1f)
         private set
-    
+
     var isGeneratingMultiPersonPrompts = mutableStateOf(false)
         private set
-    
+
     // List of available commands
     val availableCommands = listOf(
         CommandSuggestion("/share", "Share the current image"),
@@ -62,95 +62,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var showCommandSuggestions = mutableStateOf(false)
         private set
-    
+
     var currentScreen = mutableStateOf<Screen>(Screen.Landing)
         private set
-        
+
     var personCount = mutableStateOf<Int?>(null)
         private set
-        
+
     var isLoadingPersonCount = mutableStateOf(false)
         private set
-    
+
     // Combined state for all loading states
     val isAnyLoading = derivedStateOf {
         isLoadingPersonCount.value || isGeneratingPrompts.value || isProcessing.value
     }
-    
+
     var loadingMessage = mutableStateOf<String?>(null)
         private set
-        
+
     var isGeneratingPrompts = mutableStateOf(false)
         private set
-        
+
     var personCountError = mutableStateOf<String?>(null)
         private set
 
     var selectedImageUri = mutableStateOf<Uri?>(null)
         private set
-    
+
     var customPrompt = mutableStateOf("")
         private set
-    
+
     // Track the currently selected category and prompt name
     private var currentCategory: String? = null
     private var currentPromptName: String? = null
-    
-    var editedImageUrl = mutableStateOf<String?>(null)
+
+    // History of edited image URIs (as String for easier persistence if needed)
+    var editedImageUrls = mutableStateOf(listOf<String>())
         private set
-    
+
     var isProcessing = mutableStateOf(false)
         private set
-    
+
     var errorMessage = mutableStateOf<String?>(null)
         private set
-    
+
     var currentPage = mutableStateOf(0)
         private set
-        
+
     var isFullScreenMode = mutableStateOf(false)
         private set
-    
+
     var saveMessage = mutableStateOf<String?>(null)
         private set
-    
+
     var downsizeImages = mutableStateOf(true)
         private set
-    
+
     var inputFidelity = mutableStateOf("low") // "low" or "high"
         private set
-    
+
     var quality = mutableStateOf("low") // "low", "medium", or "high"
         private set
-    
+
     fun setSelectedImage(uri: Uri?) {
         selectedImageUri.value = uri
         // Clear previous results when new image is selected
-        editedImageUrl.value = null
+        editedImageUrls.value = emptyList()
         errorMessage.value = null
         currentPage.value = 0
         saveMessage.value = null
         personCount.value = null
         personCountError.value = null
-        
+
         uri?.let {
             currentScreen.value = Screen.Edit(it)
             detectPersonCount(it)
         }
     }
-    
+
     private fun detectPersonCount(uri: Uri) {
         viewModelScope.launch {
             try {
                 isLoadingPersonCount.value = true
                 loadingMessage.value = "Processing input image"
                 personCountError.value = null
-                
+
                 // Acquire wake lock for API call
                 acquireWakeLock(getApplication())
-                
+
                 val result = openAIService.detectPersons(getApplication(), uri)
-                
+
                 result.fold(
                     onSuccess = { count ->
                         personCount.value = count
@@ -165,7 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         personCount.value = null
                     }
                 )
-                
+
                 // If multiple people detected, ensure multi-person prompts are generated
                 if (personCount.value != null && personCount.value!! > 1) {
                     try {
@@ -177,7 +178,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 isGeneratingMultiPersonPrompts.value = false
                             }
                         }
-                        
+
                         // Load prompts - allow expiry check here since it's initial load
                         PromptsLoader.loadPrompts(getApplication(), forceRegenerate = false, ignoreCacheExpiry = false)
                     } catch (e: Exception) {
@@ -186,7 +187,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         promptGenerationProgress.value = 1f
                     }
                 }
-                
             } catch (e: Exception) {
                 personCountError.value = e.message ?: "An unexpected error occurred"
                 personCount.value = null
@@ -217,7 +217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateToPromptsEditor() {
         currentScreen.value = Screen.PromptsEditor
     }
-    
+
     fun updateCustomPrompt(prompt: String, category: String? = null, promptName: String? = null) {
         viewModelScope.launch {
             // Check if the prompt is a command
@@ -246,10 +246,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isGeneratingMultiPersonPrompts.value = false
                         }
                     }
-                    
+
                     // Use cached prompts unless they don't exist
                     PromptsLoader.loadPrompts(getApplication(), forceRegenerate = false, ignoreCacheExpiry = true)
-                    
+
                     // Use cached multi-person prompt
                     val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(category, promptName)
                     if (multiPersonPrompt != null) {
@@ -267,17 +267,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 android.util.Log.d("MainViewModel", "Using original prompt")
                 customPrompt.value = prompt
             }
-            
+
             android.util.Log.d("MainViewModel", "Updated custom prompt. Category: $category, Prompt name: $promptName, Using multi-person: ${personCount.value != null && personCount.value!! > 1}")
         }
     }
-    
+
     private suspend fun getAppropriatePrompt(context: Context, prompt: String): String {
         android.util.Log.d("MainViewModel", "Getting appropriate prompt. Person count: ${personCount.value}, Category: $currentCategory, Prompt name: $currentPromptName")
-        
+
         // Get base prompt first
         val basePrompt = PromptsLoader.getBasePrompt(context)
-        
+
         // If no category or prompt name, return base prompt + original prompt
         if (currentCategory == null || currentPromptName == null) {
             android.util.Log.d("MainViewModel", "No category or prompt name available, using original prompt")
@@ -288,26 +288,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val shouldUseMultiPersonPrompt = personCount.value != null && personCount.value!! > 1
         if (shouldUseMultiPersonPrompt) {
             android.util.Log.d("MainViewModel", "Multiple people detected, attempting to get multi-person prompt")
+            try {
+                // First ensure prompts are loaded and multi-person prompts are generated
+                isGeneratingPrompts.value = true
+                loadingMessage.value = "Generating prompts"
+
                 try {
-                    // First ensure prompts are loaded and multi-person prompts are generated
-                    isGeneratingPrompts.value = true
-                    loadingMessage.value = "Generating prompts"
-                    
-                    try {
-                        // Setup progress tracking if not already set
-                        if (!isGeneratingMultiPersonPrompts.value) {
-                            isGeneratingMultiPersonPrompts.value = true
-                            PromptsLoader.setGenerationCallback { progress ->
-                                promptGenerationProgress.value = progress
-                                if (progress >= 1f) {
-                                    isGeneratingMultiPersonPrompts.value = false
-                                }
+                    // Setup progress tracking if not already set
+                    if (!isGeneratingMultiPersonPrompts.value) {
+                        isGeneratingMultiPersonPrompts.value = true
+                        PromptsLoader.setGenerationCallback { progress ->
+                            promptGenerationProgress.value = progress
+                            if (progress >= 1f) {
+                                isGeneratingMultiPersonPrompts.value = false
                             }
                         }
-                        
-                        // Use cached prompts unless they don't exist
-                        PromptsLoader.loadPrompts(context, forceRegenerate = false, ignoreCacheExpiry = true)
-                    
+                    }
+
+                    // Use cached prompts unless they don't exist
+                    PromptsLoader.loadPrompts(context, forceRegenerate = false, ignoreCacheExpiry = true)
+
                     // After prompts are loaded, check for multi-person version
                     val multiPersonPrompt = PromptsLoader.getMultiPersonPrompt(currentCategory!!, currentPromptName!!)
                     if (multiPersonPrompt != null) {
@@ -324,32 +324,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 android.util.Log.e("MainViewModel", "Error getting multi-person prompt: ${e.message}")
             }
         }
-        
+
         android.util.Log.d("MainViewModel", "Using original prompt as fallback")
         return basePrompt + prompt
     }
-    
+
     fun setDownsizeImages(context: Context, downsize: Boolean) {
         downsizeImages.value = downsize
         PromptsLoader.saveDownsizeImages(context, downsize)
     }
-    
+
     fun setInputFidelity(context: Context, fidelity: String) {
         inputFidelity.value = fidelity
         PromptsLoader.saveInputFidelity(context, fidelity)
     }
-    
+
     fun setQuality(context: Context, qualityValue: String) {
         quality.value = qualityValue
         PromptsLoader.saveQuality(context, qualityValue)
     }
-    
+
     fun loadProcessingPreferences(context: Context) {
         downsizeImages.value = PromptsLoader.getDownsizeImages(context)
         inputFidelity.value = PromptsLoader.getInputFidelity(context)
         quality.value = PromptsLoader.getQuality(context)
     }
-    
+
     /**
      * Clear the multi-person prompts cache to force regeneration
      */
@@ -358,18 +358,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 isGeneratingPrompts.value = true
                 loadingMessage.value = "Generating prompts"
-                
+
                 // Clear cache and reset state
                 PromptsLoader.clearMultiPersonPrompts(context)
                 customPrompt.value = ""  // Reset prompt selection
                 currentCategory = null
                 currentPromptName = null
-                
+
                 // Force immediate regeneration of prompts if needed
                 if (selectedImageUri.value != null && personCount.value != null && personCount.value!! > 1) {
                     isGeneratingPrompts.value = true
                     loadingMessage.value = "Regenerating prompts"
-                    
+
                     try {
                         // Setup progress tracking
                         isGeneratingMultiPersonPrompts.value = true
@@ -379,12 +379,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 isGeneratingMultiPersonPrompts.value = false
                             }
                         }
-                        
+
                         // Force regeneration after clearing cache
                         android.util.Log.d("MainViewModel", "Force regenerating prompts...")
                         PromptsLoader.loadPrompts(context, forceRegenerate = true, ignoreCacheExpiry = true)
                         android.util.Log.d("MainViewModel", "Prompts regenerated")
-                        
+
                         // Reset prompt selection
                         customPrompt.value = ""
                         currentCategory = null
@@ -409,7 +409,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
+
     private fun acquireWakeLock(context: Context) {
         try {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -423,7 +423,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.e("MainViewModel", "Failed to acquire wake lock: ${e.message}")
         }
     }
-    
+
     private fun releaseWakeLock() {
         try {
             wakeLock?.let {
@@ -437,44 +437,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.e("MainViewModel", "Failed to release wake lock: ${e.message}")
         }
     }
-    
+
     fun setCurrentPage(page: Int) {
         currentPage.value = page
     }
-    
+
     fun toggleFullScreenMode() {
         isFullScreenMode.value = !isFullScreenMode.value
     }
-    
+
+    /**
+     * Returns the Uri of the image currently displayed (original or edited)
+     */
+    fun getCurrentImageUri(): Uri? {
+        return if (currentPage.value == 0) {
+            selectedImageUri.value
+        } else {
+            editedImageUrls.value.getOrNull(currentPage.value - 1)?.let { Uri.parse(it) }
+        }
+    }
+
+    /**
+     * Handle chat-like commands (share/save/etc) using the currently visible image.
+     */
     fun handleChatCommand(context: Context, command: String) {
         when (command.lowercase()) {
             "/share" -> {
                 viewModelScope.launch {
-                    if (currentPage.value == 0) {
-                        selectedImageUri.value?.let { uri ->
-                            val bitmap = urlToBitmap(uri.toString())
-                            bitmap?.let { shareImage(it) }
-                        }
-                    } else {
-                        editedImageUrl.value?.let { url ->
-                            val bitmap = urlToBitmap(url)
-                            bitmap?.let { shareImage(it) }
-                        }
+                    val uri = getCurrentImageUri()
+                    uri?.let {
+                        val bitmap = urlToBitmap(it.toString())
+                        bitmap?.let { b -> shareImage(b) }
                     }
                 }
             }
             "/save" -> {
                 viewModelScope.launch {
-                    if (currentPage.value == 0) {
-                        selectedImageUri.value?.let { uri ->
-                            val bitmap = urlToBitmap(uri.toString())
-                            bitmap?.let { saveEditedImage(context, it) }
-                        }
-                    } else {
-                        editedImageUrl.value?.let { url ->
-                            val bitmap = urlToBitmap(url)
-                            bitmap?.let { saveEditedImage(context, it) }
-                        }
+                    val uri = getCurrentImageUri()
+                    uri?.let {
+                        val bitmap = urlToBitmap(it.toString())
+                        bitmap?.let { b -> saveEditedImage(context, b) }
                     }
                 }
             }
@@ -486,36 +488,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
-    fun getCurrentImageUri(): Uri? {
-        return if (currentPage.value == 0) {
+
+    /**
+     * Public entry point for editing the currently displayed image.
+     * Implements branching logic:
+     * - Editing original clears history.
+     * - Editing non-latest truncates future edits.
+     * - Editing latest appends new image.
+     */
+    fun editCurrentImage(context: Context, prompt: String) {
+        val baseUri = if (currentPage.value == 0) {
             selectedImageUri.value
         } else {
-            editedImageUrl.value?.let { Uri.parse(it) }
+            editedImageUrls.value.getOrNull(currentPage.value - 1)?.let { Uri.parse(it) }
         }
+
+        if (baseUri == null) {
+            errorMessage.value = "No image selected"
+            return
+        }
+
+        // Branching rules
+        if (currentPage.value == 0) {
+            // Editing original: clear all history
+            editedImageUrls.value = emptyList()
+        } else if (currentPage.value != editedImageUrls.value.size) {
+            // Editing an intermediate edit: truncate newer edits
+            editedImageUrls.value = editedImageUrls.value.take(currentPage.value)
+        }
+        performEdit(context, baseUri, prompt, isEditingEditedImage = currentPage.value > 0)
     }
-    
+
+    /**
+     * Legacy API kept for compatibility (not used by UI anymore).
+     */
     fun editImage(context: Context, uri: Uri, prompt: String, isEditingEditedImage: Boolean = false) {
+        // Determine if this uri corresponds to original or an edited image
+        val pageIndex = if (uri == selectedImageUri.value) 0 else {
+            val idx = editedImageUrls.value.indexOfFirst { it == uri.toString() }
+            if (idx >= 0) idx + 1 else 0
+        }
+        currentPage.value = pageIndex
+        editCurrentImage(context, prompt)
+    }
+
+    /**
+     * Core edit implementation.
+     */
+    private fun performEdit(context: Context, uri: Uri, prompt: String, isEditingEditedImage: Boolean) {
         viewModelScope.launch {
             try {
                 isProcessing.value = true
                 errorMessage.value = null
-                
+
                 // Acquire wake lock to prevent screen from sleeping
                 acquireWakeLock(context)
-                
-                // Get the appropriate prompt (includes base prompt)
+
+                // Get the appropriate prompt (includes base prompt) unless we are editing an edited image (use raw)
                 val fullPrompt = if (isEditingEditedImage) {
-                    prompt // Use original prompt when editing an already edited image
+                    prompt
                 } else {
                     getAppropriatePrompt(context, prompt)
                 }
-                
+
                 // Set high quality settings for edited images to prevent quality degradation
                 val effectiveInputFidelity = if (isEditingEditedImage) "high" else inputFidelity.value
                 val effectiveQuality = if (isEditingEditedImage) "high" else quality.value
                 val effectiveDownsizeImage = if (isEditingEditedImage) false else downsizeImages.value
-                
+
                 val result = openAIService.editImage(
                     context = context,
                     uri = uri,
@@ -525,31 +565,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     quality = effectiveQuality,
                     isEditingEditedImage = isEditingEditedImage
                 )
-                
+
                 result.fold(
                     onSuccess = { imageUrl ->
                         android.util.Log.d("MainViewModel", "Received image URL: ${imageUrl.take(100)}...")
-                        
+
                         // If it's a data URL, convert it to a temporary file for better Coil compatibility
                         if (imageUrl.startsWith("data:image/")) {
                             viewModelScope.launch {
                                 val tempFileUri = convertDataUrlToTempFile(context, imageUrl)
-                                editedImageUrl.value = tempFileUri?.toString() ?: imageUrl
-                                currentPage.value = 1 // Show edited image when ready
+                                val finalUriStr = tempFileUri?.toString() ?: imageUrl
+                                appendNewEditedImage(finalUriStr)
                             }
                         } else {
-                            editedImageUrl.value = imageUrl
-                            currentPage.value = 1 // Show edited image when ready
+                            appendNewEditedImage(imageUrl)
                         }
                     },
                     onFailure = { exception ->
                         errorMessage.value = exception.message ?: "An error occurred while editing the image"
-                        editedImageUrl.value = null
                     }
                 )
             } catch (e: Exception) {
                 errorMessage.value = e.message ?: "An unexpected error occurred"
-                editedImageUrl.value = null
             } finally {
                 isProcessing.value = false
                 // Release wake lock when processing is complete
@@ -557,14 +594,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
+
+    private fun appendNewEditedImage(uriString: String) {
+        editedImageUrls.value = editedImageUrls.value + uriString
+        currentPage.value = editedImageUrls.value.size // move to newest page
+    }
+
     fun saveEditedImage(context: Context, bitmap: Bitmap) {
         viewModelScope.launch {
             try {
                 val saved = withContext(Dispatchers.IO) {
                     saveImageToGallery(context, bitmap)
                 }
-                
+
                 if (saved) {
                     saveMessage.value = "Image saved to gallery successfully!"
                 } else {
@@ -575,7 +617,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
+
     private suspend fun saveImageToGallery(context: Context, bitmap: Bitmap): Boolean {
         return try {
             val contentValues = ContentValues().apply {
@@ -583,12 +625,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                 put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
             }
-            
+
             val uri = context.contentResolver.insert(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 contentValues
             )
-            
+
             uri?.let {
                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
@@ -599,7 +641,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             false
         }
     }
-    
+
     private suspend fun convertDataUrlToTempFile(context: Context, dataUrl: String): Uri? {
         return withContext(Dispatchers.IO) {
             try {
@@ -607,7 +649,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val base64Data = dataUrl.substringAfter("base64,")
                 val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                 val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-                
+
                 if (bitmap != null) {
                     // Create temporary file
                     val tempFile = File(context.cacheDir, "temp_edited_${System.currentTimeMillis()}.png")
@@ -615,7 +657,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
                     outputStream.close()
                     bitmap.recycle()
-                    
+
                     android.util.Log.d("MainViewModel", "Created temp file: ${tempFile.absolutePath}")
                     Uri.fromFile(tempFile)
                 } else {
@@ -628,20 +670,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    
+
     fun clearError() {
         errorMessage.value = null
     }
-    
-    fun shareEditedImage() {
+
+    /**
+     * Share whatever image (original or edited) is currently visible.
+     */
+    fun shareCurrentImage() {
         viewModelScope.launch {
             try {
-                if (editedImageUrl.value == null) {
-                    errorMessage.value = "No edited image to share"
+                val uri = getCurrentImageUri()
+                if (uri == null) {
+                    errorMessage.value = "No image to share"
                     return@launch
                 }
-
-                val bitmap = urlToBitmap(editedImageUrl.value!!)
+                val bitmap = urlToBitmap(uri.toString())
                 bitmap?.let { bmp ->
                     shareImage(bmp)
                 } ?: run {
@@ -651,6 +696,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage.value = "Error sharing image: ${e.message}"
             }
         }
+    }
+
+    // Deprecated single-edited-image share API retained for compatibility
+    fun shareEditedImage() {
+        shareCurrentImage()
     }
 
     private suspend fun shareImage(bitmap: Bitmap) {
@@ -691,7 +741,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearSaveMessage() {
         saveMessage.value = null
     }
-    
+
     override fun onCleared() {
         super.onCleared()
         // Ensure wake lock is released when ViewModel is destroyed
