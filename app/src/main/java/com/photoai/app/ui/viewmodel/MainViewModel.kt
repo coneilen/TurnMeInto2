@@ -4,8 +4,11 @@ import android.app.Application
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.*
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Environment
 import android.os.PowerManager
@@ -24,6 +27,9 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlin.math.roundToInt
 
 // Available chat commands with descriptions
@@ -50,10 +56,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var isGeneratingMultiPersonPrompts = mutableStateOf(false)
         private set
 
-    // List of available commands
+    // List of available commands (added /slideshow)
     val availableCommands = listOf(
         CommandSuggestion("/share", "Share the current image"),
         CommandSuggestion("/save", "Save image to gallery"),
+        CommandSuggestion("/slideshow", "Generate slideshow video of edits so far"),
         CommandSuggestion("/clear_prompts", "Clear prompts cache"),
         CommandSuggestion("/help", "Show available commands")
     )
@@ -75,7 +82,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Combined state for all loading states
     val isAnyLoading = derivedStateOf {
-        isLoadingPersonCount.value || isGeneratingPrompts.value || isProcessing.value
+        isLoadingPersonCount.value || isGeneratingPrompts.value || isProcessing.value || isGeneratingSlideshow.value
     }
 
     var loadingMessage = mutableStateOf<String?>(null)
@@ -99,6 +106,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // History of edited image URIs (as String for easier persistence if needed)
     var editedImageUrls = mutableStateOf(listOf<String>())
+        private set
+
+    // Parallel list of user-entered prompts for each edited image (not including base prompt)
+    var editedImagePrompts = mutableStateOf(listOf<String>())
         private set
 
     var isProcessing = mutableStateOf(false)
@@ -125,15 +136,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var quality = mutableStateOf("low") // "low", "medium", or "high"
         private set
 
+    // Slideshow states
+    var slideshowVideoUri = mutableStateOf<Uri?>(null)
+        private set
+    var isGeneratingSlideshow = mutableStateOf(false)
+        private set
+    var slideshowError = mutableStateOf<String?>(null)
+        private set
+
     fun setSelectedImage(uri: Uri?) {
         selectedImageUri.value = uri
         // Clear previous results when new image is selected
         editedImageUrls.value = emptyList()
+        editedImagePrompts.value = emptyList()
         errorMessage.value = null
         currentPage.value = 0
         saveMessage.value = null
         personCount.value = null
         personCountError.value = null
+        slideshowVideoUri.value = null
 
         uri?.let {
             currentScreen.value = Screen.Edit(it)
@@ -484,6 +505,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             "/clear_prompts" -> {
                 clearMultiPersonPromptsCache(context)
             }
+            "/slideshow" -> {
+                viewModelScope.launch {
+                    generateSlideshow(context)
+                }
+            }
             "/help" -> {
                 showHelpDialog.value = true
             }
@@ -513,11 +539,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (currentPage.value == 0) {
             // Editing original: clear all history
             editedImageUrls.value = emptyList()
+            editedImagePrompts.value = emptyList()
         } else if (currentPage.value != editedImageUrls.value.size) {
             // Editing an intermediate edit: truncate newer edits
             editedImageUrls.value = editedImageUrls.value.take(currentPage.value)
+            editedImagePrompts.value = editedImagePrompts.value.take(currentPage.value - 0) // prompts align with edits
         }
-        performEdit(context, baseUri, prompt, isEditingEditedImage = currentPage.value > 0)
+        // Invalidate existing slideshow if any
+        slideshowVideoUri.value = null
+
+        performEdit(context, baseUri, prompt, isEditingEditedImage = currentPage.value > 0, userEnteredPrompt = prompt)
     }
 
     /**
@@ -536,11 +567,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Core edit implementation.
      */
-    private fun performEdit(context: Context, uri: Uri, prompt: String, isEditingEditedImage: Boolean) {
+    private fun performEdit(context: Context, uri: Uri, prompt: String, isEditingEditedImage: Boolean, userEnteredPrompt: String) {
         viewModelScope.launch {
             try {
                 isProcessing.value = true
-                // Preserve existing error message until user explicitly dismisses it
                 // Capture original/base image dimensions (used for upscaling edited result)
                 val baseDimensions = getImageDimensions(context, uri)
 
@@ -583,10 +613,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     targetHeight = baseDimensions?.second
                                 )
                                 val finalUriStr = tempFileUri?.toString() ?: imageUrl
-                                appendNewEditedImage(finalUriStr)
+                                appendNewEditedImage(finalUriStr, userEnteredPrompt)
                             }
                         } else {
-                            appendNewEditedImage(imageUrl)
+                            appendNewEditedImage(imageUrl, userEnteredPrompt)
                         }
                     },
                     onFailure = { exception ->
@@ -597,15 +627,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage.value = e.message ?: "An unexpected error occurred"
             } finally {
                 isProcessing.value = false
-                // Release wake lock when processing is complete
                 releaseWakeLock()
             }
         }
     }
 
-    private fun appendNewEditedImage(uriString: String) {
+    private fun appendNewEditedImage(uriString: String, userPrompt: String) {
         editedImageUrls.value = editedImageUrls.value + uriString
+        editedImagePrompts.value = editedImagePrompts.value + userPrompt
         currentPage.value = editedImageUrls.value.size // move to newest page
+        // invalidate slideshow
+        slideshowVideoUri.value = null
     }
 
     fun saveEditedImage(context: Context, bitmap: Bitmap) {
@@ -692,11 +724,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Multi-step upscale with denoise + unsharp mask to improve perceived detail.
-     * Pipeline:
-     * 0. Adaptive noise estimation; if noisy, apply median-based denoise (edge-preserving).
-     * 1. Only upscale if both dimensions are below original and scale factor > 1.05.
-     * 2. Progressive 2x steps to reduce interpolation artifacts before final resize.
-     * 3. Unsharp mask restores micro-contrast after denoise + scaling.
      */
     private fun upscaleMultiStepSharpen(edited: Bitmap, origW: Int, origH: Int): Bitmap {
         // Optional denoise first
@@ -743,12 +770,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return sharpened
     }
 
-    /**
-     * Decide if denoising is needed via a lightweight noise metric on luma differences.
-     */
     private fun denoiseIfNoisy(src: Bitmap): Bitmap {
         val noise = estimateNoiseLuma(src)
-        // Threshold empirically chosen; typical clean AI images < 5, noisy > 8-10
         return if (noise >= 8f) {
             android.util.Log.d("MainViewModel", "Denoising edited image before upscale (noise=$noise)")
             medianDenoise3x3(src)
@@ -758,9 +781,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Estimate noise by sampling a grid and averaging absolute luma diffs to right & bottom neighbors.
-     */
     private fun estimateNoiseLuma(bmp: Bitmap): Float {
         val w = bmp.width
         val h = bmp.height
@@ -789,9 +809,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return if (count == 0) 0f else acc / count
     }
 
-    /**
-     * 3x3 median denoise per channel (edges preserved). Returns a new Bitmap if applied.
-     */
     private fun medianDenoise3x3(src: Bitmap): Bitmap {
         val w = src.width
         val h = src.height
@@ -800,7 +817,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         src.getPixels(pixels, 0, w, 0, 0, w, h)
         val result = IntArray(w * h)
 
-        // Copy borders directly
         for (x in 0 until w) {
             result[x] = pixels[x]
             result[(h - 1) * w + x] = pixels[(h - 1) * w + x]
@@ -815,7 +831,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val bArr = IntArray(9)
 
         fun median9(a: IntArray): Int {
-            // In-place partial selection (simple insertion sort; N=9 negligible)
             for (i in 1 until 9) {
                 val v = a[i]
                 var j = i - 1
@@ -852,10 +867,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return out
     }
 
-    /**
-     * Simple unsharp mask: blur (3x3 box) then combine:
-     * result = original * (1 + amount) - blur * amount
-     */
     private fun applyUnsharpMask(src: Bitmap, amount: Float = 0.3f): Bitmap {
         val w = src.width
         val h = src.height
@@ -864,7 +875,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val blur = IntArray(w * h)
         out.getPixels(original, 0, w, 0, 0, w, h)
 
-        // 3x3 box blur (skip outer border)
         for (y in 1 until h - 1) {
             for (x in 1 until w - 1) {
                 var r = 0; var g = 0; var b = 0
@@ -885,7 +895,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Unsharp combine
         for (i in original.indices) {
             val o = original[i]
             val bpx = blur[i]
@@ -904,9 +913,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return out
     }
 
-    /**
-     * Efficiently get intrinsic image dimensions without fully decoding bitmap.
-     */
     private fun getImageDimensions(context: Context, uri: Uri): Pair<Int, Int>? {
         return try {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -926,9 +932,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         errorMessage.value = null
     }
 
-    /**
-     * Share whatever image (original or edited) is currently visible.
-     */
     fun shareCurrentImage() {
         viewModelScope.launch {
             try {
@@ -949,7 +952,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Deprecated single-edited-image share API retained for compatibility
     fun shareEditedImage() {
         shareCurrentImage()
     }
@@ -957,14 +959,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun shareImage(bitmap: Bitmap) {
         withContext(Dispatchers.IO) {
             try {
-                // Create a temporary file to share
                 val context = getApplication<Application>()
                 val shareFile = File(context.cacheDir, "shared_image_${System.currentTimeMillis()}.jpg")
                 FileOutputStream(shareFile).use { out ->
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                 }
 
-                // Create share intent
                 val shareUri = FileProvider.getUriForFile(
                     context,
                     "${context.packageName}.fileprovider",
@@ -979,7 +979,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
 
-                // Create chooser intent
                 val chooserIntent = Intent.createChooser(shareIntent, "Share edited image")
                 chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(chooserIntent)
@@ -993,9 +992,446 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         saveMessage.value = null
     }
 
+    /**
+     * Launch an intent to view the slideshow video if available.
+     */
+    fun viewSlideshow(context: Context) {
+        val uri = slideshowVideoUri.value ?: return
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/mp4")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            errorMessage.value = "Unable to open slideshow: ${e.message}"
+        }
+    }
+
+    /**
+     * Generate slideshow video (MP4) from original + edits up to currentPage (must include at least one edit).
+     */
+    private suspend fun generateSlideshow(context: Context) {
+        if (isGeneratingSlideshow.value) return
+        val original = selectedImageUri.value
+        if (original == null) {
+            slideshowError.value = "No original image selected"
+            errorMessage.value = slideshowError.value
+            return
+        }
+        if (currentPage.value == 0 || editedImageUrls.value.isEmpty()) {
+            slideshowError.value = "Need at least one edit to build slideshow"
+            errorMessage.value = slideshowError.value
+            return
+        }
+
+        isGeneratingSlideshow.value = true
+        slideshowError.value = null
+
+        withContext(Dispatchers.Default) {
+            val endPage = currentPage.value // inclusive page index
+            val editCountIncluded = (endPage).coerceAtMost(editedImageUrls.value.size)
+            val uris = mutableListOf<Uri>()
+            val prompts = mutableListOf<String>()
+
+            // Original first
+            uris.add(original)
+            prompts.add("Original")
+
+            // Edits (user-entered prompts)
+            for (i in 0 until editCountIncluded) {
+                val u = editedImageUrls.value.getOrNull(i) ?: continue
+                uris.add(Uri.parse(u))
+                val p = editedImagePrompts.value.getOrNull(i) ?: ""
+                prompts.add(p.ifBlank { "Edit ${i + 1}" })
+            }
+
+            try {
+                val slides = uris.size
+                if (slides < 2) {
+                    slideshowError.value = "Need at least one edit to build slideshow"
+                    errorMessage.value = slideshowError.value
+                    return@withContext
+                }
+
+                // Load first bitmap to determine target size
+                val firstBitmap = loadBitmapForSlideshow(context, uris[0]) ?: throw IllegalStateException("Failed to load first image")
+                val maxDim = 1920
+                val scale = minOf(maxDim.toFloat() / firstBitmap.width.toFloat(), maxDim.toFloat() / firstBitmap.height.toFloat(), 1f)
+                val targetW = ensureEven((firstBitmap.width * scale).roundToInt().coerceAtLeast(2))
+                val targetH = ensureEven((firstBitmap.height * scale).roundToInt().coerceAtLeast(2))
+                val frameRate = 30
+                val slideDurationSec = 5
+                val framesPerSlide = frameRate * slideDurationSec
+                firstBitmap.recycle()
+
+                val cacheFile = File(context.cacheDir, "slideshow_${System.currentTimeMillis()}.mp4")
+                if (cacheFile.exists()) cacheFile.delete()
+
+                // Select an explicit color format the encoder supports (prefer planar, else semi-planar)
+                val tempEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                val caps = tempEncoder.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                val supportsPlanar = caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar)
+                val supportsSemi = caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar)
+                val selectedColorFormat = when {
+                    supportsPlanar -> MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
+                    supportsSemi -> MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
+                    else -> {
+                        // Fallback: first supported 4:2:0 format
+                        (caps.colorFormats.firstOrNull {
+                            it == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar ||
+                            it == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
+                        }) ?: MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
+                    }
+                }
+                tempEncoder.release()
+
+                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, targetW, targetH).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, selectedColorFormat)
+                    val bitrate = (targetW * targetH * 4).coerceAtMost(6_000_000)
+                    setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 5)
+                }
+
+                val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                // Use byte-buffer (buffer queue) input mode ONLY (no surface) to avoid conflict
+                encoder.start()
+
+                val muxer = MediaMuxer(cacheFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                var trackIndex = -1
+                var muxerStarted = false
+
+                val info = MediaCodec.BufferInfo()
+                var presentationTimeUs = 0L
+
+                // Paint resources
+                val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.WHITE
+                    textSize = (targetH * 0.035f)
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    setShadowLayer(4f, 2f, 2f, 0xCC000000.toInt())
+                }
+                val bgPaint = Paint().apply {
+                    color = 0x66000000
+                    style = Paint.Style.FILL
+                }
+                val lineSpacing = textPaint.textSize * 1.2f
+                val maxTextWidth = (targetW * 0.90f)
+
+                fun composeSlide(src: Bitmap, prompt: String): Bitmap {
+                    val canvasBitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                    val c = Canvas(canvasBitmap)
+                    c.drawColor(Color.BLACK)
+
+                    // Fit center (letterbox)
+                    val scaleImg = minOf(
+                        targetW.toFloat() / src.width.toFloat(),
+                        targetH.toFloat() / src.height.toFloat()
+                    )
+                    val drawW = (src.width * scaleImg).roundToInt()
+                    val drawH = (src.height * scaleImg).roundToInt()
+                    val left = (targetW - drawW) / 2
+                    val top = (targetH - drawH) / 2
+                    val dst = Rect(left, top, left + drawW, top + drawH)
+                    c.drawBitmap(src, null, dst, null)
+
+                    // Prompt text area
+                    val safePrompt = prompt.ifBlank { "Edit" }
+                    val lines = wrapText(safePrompt, textPaint, maxTextWidth)
+                    val boxHeight = (lineSpacing * lines.size) + (lineSpacing * 0.8f)
+                    val boxTop = targetH - boxHeight
+                    c.drawRect(0f, boxTop, targetW.toFloat(), targetH.toFloat(), bgPaint)
+                    var y = boxTop + lineSpacing
+                    for (ln in lines) {
+                        c.drawText(ln, (targetW * 0.05f), y, textPaint)
+                        y += lineSpacing
+                    }
+                    return canvasBitmap
+                }
+
+                for (i in 0 until slides) {
+                    val bmp = loadBitmapForSlideshow(context, uris[i]) ?: continue
+                    val downscaled = downscaleIfNeeded(bmp, maxDim)
+                    if (downscaled != bmp) bmp.recycle()
+                    val slideBitmap = composeSlide(downscaled, prompts[i])
+                    if (downscaled != bmp) downscaled.recycle()
+
+                    val argbPixels = IntArray(slideBitmap.width * slideBitmap.height)
+                    slideBitmap.getPixels(argbPixels, 0, slideBitmap.width, 0, 0, slideBitmap.width, slideBitmap.height)
+                    val yuv = ByteArray(targetW * targetH * 3 / 2)
+                    convertARGBToYUV(
+                        argb = argbPixels,
+                        width = targetW,
+                        height = targetH,
+                        out = yuv,
+                        colorFormat = format.getInteger(MediaFormat.KEY_COLOR_FORMAT)
+                    )
+
+                    slideBitmap.recycle()
+
+                    // Feed identical frame multiple times for slide duration
+                    for (f in 0 until framesPerSlide) {
+                        val inIndex = encoder.dequeueInputBuffer(10_000)
+                        if (inIndex >= 0) {
+                            val buf = encoder.getInputBuffer(inIndex)!!
+                            buf.clear()
+                            buf.put(yuv)
+                            encoder.queueInputBuffer(
+                                inIndex,
+                                0,
+                                yuv.size,
+                                presentationTimeUs,
+                                0
+                            )
+                        }
+                        presentationTimeUs += 1_000_000L / frameRate
+
+                        loop@ while (true) {
+                            val outIndex = encoder.dequeueOutputBuffer(info, 0)
+                            when {
+                                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> break@loop
+                                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                    if (muxerStarted) {
+                                        throw IllegalStateException("Format changed after muxer started")
+                                    }
+                                    val newFormat = encoder.outputFormat
+                                    trackIndex = muxer.addTrack(newFormat)
+                                    muxer.start()
+                                    muxerStarted = true
+                                }
+                                outIndex >= 0 -> {
+                                    if (!muxerStarted) {
+                                        throw IllegalStateException("Muxer not started")
+                                    }
+                                    val outBuffer = encoder.getOutputBuffer(outIndex)!!
+                                    if (info.size > 0) {
+                                        outBuffer.position(info.offset)
+                                        outBuffer.limit(info.offset + info.size)
+                                        muxer.writeSampleData(trackIndex, outBuffer, info)
+                                    }
+                                    encoder.releaseOutputBuffer(outIndex, false)
+                                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                        break@loop
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Signal end of stream
+                val inIndex = encoder.dequeueInputBuffer(10_000)
+                if (inIndex >= 0) {
+                    encoder.queueInputBuffer(
+                        inIndex,
+                        0,
+                        0,
+                        presentationTimeUs,
+                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                    )
+                }
+                // Drain remaining
+                drainEncoder(encoder, muxer, trackIndex) { muxerStarted }
+
+                encoder.stop()
+                encoder.release()
+                muxer.stop()
+                muxer.release()
+
+                // Insert into MediaStore
+                val resolver = context.contentResolver
+                val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, "slideshow_$timeStamp.mp4")
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/PhotoAI")
+                }
+                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { out ->
+                        cacheFile.inputStream().use { input ->
+                            input.copyTo(out)
+                        }
+                    }
+                    slideshowVideoUri.value = uri
+                } else {
+                    slideshowError.value = "Failed to insert slideshow into gallery"
+                    errorMessage.value = slideshowError.value
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Slideshow generation failed: ${e.message}")
+                slideshowError.value = "Slideshow failed: ${e.message}"
+                errorMessage.value = slideshowError.value
+            } finally {
+                isGeneratingSlideshow.value = false
+            }
+        }
+    }
+
+    private fun drainEncoder(encoder: MediaCodec, muxer: MediaMuxer, trackIndex: Int, muxerStartedCheck: () -> Boolean) {
+        val info = MediaCodec.BufferInfo()
+        while (true) {
+            val outIndex = encoder.dequeueOutputBuffer(info, 10_000)
+            if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                break
+            } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (!muxerStartedCheck()) {
+                    val track = muxer.addTrack(encoder.outputFormat)
+                    muxer.start()
+                }
+            } else if (outIndex >= 0) {
+                val outBuffer: ByteBuffer = encoder.getOutputBuffer(outIndex) ?: continue
+                if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                    info.size = 0
+                }
+                if (info.size > 0 && muxerStartedCheck()) {
+                    outBuffer.position(info.offset)
+                    outBuffer.limit(info.offset + info.size)
+                    muxer.writeSampleData(trackIndex, outBuffer, info)
+                }
+                encoder.releaseOutputBuffer(outIndex, false)
+                if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun ensureEven(v: Int) = if (v % 2 == 0) v else v - 1
+
+    private fun downscaleIfNeeded(bmp: Bitmap, maxDim: Int): Bitmap {
+        val w = bmp.width
+        val h = bmp.height
+        val largest = maxOf(w, h)
+        if (largest <= maxDim) return bmp
+        val scale = maxDim.toFloat() / largest.toFloat()
+        val nw = (w * scale).roundToInt()
+        val nh = (h * scale).roundToInt()
+        return Bitmap.createScaledBitmap(bmp, nw, nh, true)
+    }
+
+    private fun loadBitmapForSlideshow(context: Context, uri: Uri): Bitmap? {
+        return try {
+            if (uri.scheme == "http" || uri.scheme == "https" || uri.toString().startsWith("data:image/")) {
+                runBlockingIfNeeded {
+                    urlToBitmap(uri.toString())
+                }
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to load bitmap for slideshow: ${e.message}")
+            null
+        }
+    }
+
+    private fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
+        val words = text.split(" ")
+        val lines = mutableListOf<String>()
+        var current = StringBuilder()
+        for (w in words) {
+            val tentative = if (current.isEmpty()) w else current.toString() + " " + w
+            if (paint.measureText(tentative) <= maxWidth) {
+                if (current.isEmpty()) current.append(w) else {
+                    current.append(" ").append(w)
+                }
+            } else {
+                if (current.isNotEmpty()) {
+                    lines.add(current.toString())
+                }
+                current = StringBuilder(w)
+            }
+        }
+        if (current.isNotEmpty()) lines.add(current.toString())
+        // Limit lines to 3 with ellipsis
+        if (lines.size > 3) {
+            val limited = lines.take(3).toMutableList()
+            val last = limited.last()
+            val ellipsized = ellipsize(last, paint, maxWidth)
+            limited[limited.lastIndex] = ellipsized
+            return limited
+        }
+        return lines
+    }
+
+    private fun ellipsize(text: String, paint: Paint, maxWidth: Float): String {
+        var t = text
+        if (paint.measureText(t) <= maxWidth) return t
+        while (t.isNotEmpty() && paint.measureText("$t...") > maxWidth) {
+            t = t.dropLast(1)
+        }
+        return if (t.isEmpty()) "..." else "$t..."
+    }
+
+    /**
+     * Convert ARGB to the requested YUV420 format (planar I420 or semi-planar NV12/NV21 style).
+     * We produce:
+     *  - COLOR_FormatYUV420Planar: Y plane, then U plane, then V plane (I420)
+     *  - COLOR_FormatYUV420SemiPlanar: Y plane, then interleaved UV (NV12)
+     */
+    private fun convertARGBToYUV(
+        argb: IntArray,
+        width: Int,
+        height: Int,
+        out: ByteArray,
+        colorFormat: Int
+    ) {
+        val frameSize = width * height
+        val qFrameSize = frameSize / 4
+        val isPlanar = colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
+        val isSemi = colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
+
+        var yIndex = 0
+        var uIndex = frameSize
+        var vIndex = frameSize + qFrameSize
+        var uvIndex = frameSize // for semi-planar
+
+        var index = 0
+        for (j in 0 until height) {
+            for (i in 0 until width) {
+                val c = argb[index]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+
+                var y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                var u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                var v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                y = y.coerceIn(0, 255)
+                u = u.coerceIn(0, 255)
+                v = v.coerceIn(0, 255)
+
+                out[yIndex++] = y.toByte()
+
+                if (j % 2 == 0 && i % 2 == 0) {
+                    if (isPlanar) {
+                        out[uIndex++] = u.toByte()
+                        out[vIndex++] = v.toByte()
+                    } else if (isSemi) {
+                        // Switched to NV21 (VU interleaved) to fix purple/green tint observed with previous UV order
+                        out[uvIndex++] = v.toByte()
+                        out[uvIndex++] = u.toByte()
+                    }
+                }
+                index++
+            }
+        }
+    }
+
+    private fun runBlockingIfNeeded(block: suspend () -> Bitmap?): Bitmap? {
+        return try {
+            kotlinx.coroutines.runBlocking { block() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
-        // Ensure wake lock is released when ViewModel is destroyed
         releaseWakeLock()
     }
 }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,7 +28,10 @@ fun FullScreenImageDialog(
     editedUris: List<Uri>,
     onDismiss: () -> Unit,
     currentPage: Int,
-    onPageChanged: (Int) -> Unit
+    onPageChanged: (Int) -> Unit,
+    slideshowUri: Uri? = null,
+    onViewSlideshow: (() -> Unit)? = null,
+    isGeneratingSlideshow: Boolean = false
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -97,11 +101,40 @@ fun FullScreenImageDialog(
                             Modifier
                                 .size(8.dp)
                                 .background(
-                                    color = if (page == pagerState.currentPage) Color.White 
-                                           else Color.White.copy(alpha = 0.3f),
+                                    color = if (page == pagerState.currentPage) Color.White
+                                    else Color.White.copy(alpha = 0.3f),
                                     shape = CircleShape
                                 )
                         )
+                    }
+                }
+            }
+
+            // Slideshow action / progress (bottom-right)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+            ) {
+                when {
+                    isGeneratingSlideshow -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            color = Color.White,
+                            strokeWidth = 4.dp
+                        )
+                    }
+                    slideshowUri != null && onViewSlideshow != null -> {
+                        FloatingActionButton(
+                            onClick = { onViewSlideshow() },
+                            containerColor = Color.White.copy(alpha = 0.15f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = "View slideshow",
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             }

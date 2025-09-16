@@ -237,6 +237,51 @@ fun EditScreen(
                                     }
                                 }
                             }
+
+                            // Slideshow controls (bottom-right)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(16.dp)
+                            ) {
+                                when {
+                                    viewModel.isGeneratingSlideshow.value -> {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(48.dp),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            strokeWidth = 4.dp
+                                        )
+                                    }
+                                    viewModel.slideshowVideoUri.value != null -> {
+                                        FloatingActionButton(
+                                            onClick = { viewModel.viewSlideshow(context) },
+                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                                            shape = CircleShape
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "View slideshow",
+                                                tint = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                                    !viewModel.isAnyLoading.value &&
+                                            viewModel.editedImageUrls.value.isNotEmpty() &&
+                                            viewModel.currentPage.value > 0 -> {
+                                        FloatingActionButton(
+                                            onClick = { viewModel.handleChatCommand(context, "/slideshow") },
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            shape = CircleShape
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Movie,
+                                                contentDescription = "Generate slideshow",
+                                                tint = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             
                             // Loading overlay (person counting, prompt generation, or multi-person prompts)
                             if (viewModel.isLoadingPersonCount.value || viewModel.isGeneratingPrompts.value || viewModel.isGeneratingMultiPersonPrompts.value) {
@@ -314,7 +359,10 @@ fun EditScreen(
                         editedUris = viewModel.editedImageUrls.value.map { Uri.parse(it) },
                         onDismiss = { viewModel.toggleFullScreenMode() },
                         currentPage = viewModel.currentPage.value,
-                        onPageChanged = { viewModel.setCurrentPage(it) }
+                        onPageChanged = { viewModel.setCurrentPage(it) },
+                        slideshowUri = viewModel.slideshowVideoUri.value,
+                        onViewSlideshow = { viewModel.viewSlideshow(context) },
+                        isGeneratingSlideshow = viewModel.isGeneratingSlideshow.value
                     )
                 }
                 
