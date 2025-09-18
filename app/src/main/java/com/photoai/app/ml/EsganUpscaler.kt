@@ -6,109 +6,150 @@ import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.tensorflow.lite.Delegate
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.GpuDelegate
-import org.tensorflow.lite.nnapi.NnApiDelegate
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.ceil
-import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 
 /**
- * Real-ESRGAN 4x TFLite based upscaler with:
- *  - Lazy interpreter init (GPU -> NNAPI -> CPU fallback)
- *  - Tiled inference w/ overlap + seam blending
- *  - Multi-pass scaling (SCALE_FACTOR^n) + fractional resize
- *  - Swirl artifact suppression post-process
+ * Real-ESRGAN 4x TFLite based upscaler (memory-optimized).
+ *
+ * Key improvements over previous version:
+ *  - Optional forced XNNPACK (CPU) backend (skips GPU/NNAPI) for stability.
+ *  - Pre-downscale strategy when required scale < 4× to avoid producing an oversized
+ *    intermediate (Option B: match width after ESRGAN, shrink height afterwards).
+ *  - Memory guard estimating peak buffers before running a pass; falls back early if unsafe.
+ *  - Short-based weight accumulation (quantized) instead of large FloatArray for blending.
+ *  - Reusable direct ByteBuffers for per-tile model I/O to reduce GC churn.
+ *  - Adaptive initial tile size with pre-check instead of repeated OOM retries.
+ *  - Configurable headroom limit and output memory cap.
  *
  * Assumptions (adjust if your model differs):
- *  - Model input/output: float32 RGB, range [0,1]
- *  - Scale factor: 4x (per pass)
+ *  - Model input/output: float32 RGB [0,1]
+ *  - Scale factor per pass: 4x
+ *
+ * Usage:
+ *  val bitmap2 = EsganUpscaler.upscaleToMatch(context, srcBitmap, targetW, targetH,
+ *      EsganOptions(tileSize=224, enableArtifactDenoise=false))
+ *
+ * Tuning:
+ *  - Reduce maxOutputMegabytes on low-memory devices (e.g. 96).
+ *  - Increase minEsrganScaleThreshold to skip ESRGAN for modest enlargements.
+ *  - Adjust tileSize / overlap for seam vs speed trade-off.
+ *  - Set forceCpuXnnpack=false to allow GPU/NNAPI (may increase memory variance).
+ *
+ * Diagnostics (logcat filters):
+ *  phase=esrgan_entry, phase=memory_estimate, phase=tiled_pass, phase=esrgan_complete.
  */
 data class EsganOptions(
     val tileSize: Int = 224,
     val tileOverlap: Int = 16,
-    val swirlSuppression: Float = 0.4f, // 0..1
-    val enableArtifactDenoise: Boolean = true,
-    val minEsrganScaleThreshold: Float = 1.15f, // skip ESRGAN if scale smaller
-    val maxRetries: Int = 3
+    val swirlSuppression: Float = 0.4f,
+    val enableArtifactDenoise: Boolean = false,
+    val minEsrganScaleThreshold: Float = 1.15f,
+    val maxRetries: Int = 1,                 // We now size tiles up-front; limit retries.
+    val forceCpuXnnpack: Boolean = true,
+    val cpuMaxThreads: Int = 4,
+    val preScaleHeadroom: Float = 1.15f,      // Allow at most +15% overshoot vs target on any axis.
+    val maxOutputMegabytes: Int = 120,        // Soft memory cap for output frame related arrays.
+    val adaptiveMemoryGuard: Boolean = true,
+    val initialTileSize: Int = 224,
+    val minTileSize: Int = 128
 )
 
 object EsganUpscaler {
 
     private const val TAG = "EsganUpscaler"
-    private const val MODEL_PATH = "models/Real-ESRGAN-General-x4v3.tflite" // New 4x Real-ESRGAN model filename
-    private const val SCALE_FACTOR = 4 // per pass
+    private const val MODEL_PATH = "models/Real-ESRGAN-General-x4v3.tflite"
+    private const val SCALE_FACTOR = 4
     private const val SOBEL_K = 10f
     private const val LOW_GRAD_THRESHOLD = 4f
+    private const val WEIGHT_SCALE = 256      // Quantization scale for weight accumulation
 
     private var interpreter: Interpreter? = null
     private var backend: Backend = Backend.NONE
-    private var gpuDelegate: GpuDelegate? = null
-    private var nnApiDelegate: NnApiDelegate? = null
 
-    private enum class Backend { GPU, NNAPI, CPU, NONE }
+    private enum class Backend { CPU_XNNPACK, GPU, NNAPI, CPU, NONE }
 
     private val lock = Any()
     private var initTried = false
 
-    suspend fun ensureReady(context: Context): Boolean = withContext(Dispatchers.IO) {
+    // Reusable model buffers
+    private var inputBuffer: ByteBuffer? = null
+    private var inputCap = 0
+    private var outputBuffer: ByteBuffer? = null
+    private var outputCap = 0
+
+    suspend fun ensureReady(context: Context, options: EsganOptions): Boolean = withContext(Dispatchers.IO) {
         synchronized(lock) {
             if (interpreter != null) return@synchronized true
             if (initTried) return@synchronized interpreter != null
             initTried = true
-            initInterpreterCascade(context)
+            initInterpreter(context, options)
             interpreter != null
         }
     }
 
-    private fun initInterpreterCascade(context: Context) {
-        val options = Interpreter.Options()
+    private fun initInterpreter(context: Context, options: EsganOptions) {
+        // Forced CPU/XNNPACK path (preferred for memory determinism)
+        if (options.forceCpuXnnpack) {
+            try {
+                val cpuOpts = Interpreter.Options().apply {
+                    // XNNPACK is enabled by default in recent TFLite when threads >1
+                    setNumThreads(min(options.cpuMaxThreads, Runtime.getRuntime().availableProcessors().coerceAtLeast(1)))
+                }
+                interpreter = Interpreter(loadModelBuffer(context), cpuOpts)
+                backend = Backend.CPU_XNNPACK
+                Log.i(TAG, "Initialized ESRGAN with forced XNNPACK backend (threads=${cpuOpts.numThreads})")
+                return
+            } catch (e: Throwable) {
+                Log.e(TAG, "Forced CPU/XNNPACK init failed: ${e.message}")
+                interpreter = null
+            }
+        }
 
-        // Try GPU
+        // Fallback cascade (kept for completeness — normally not reached when forceCpuXnnpack=true)
         try {
-            gpuDelegate = GpuDelegate()
-            options.addDelegate(gpuDelegate)
-            interpreter = Interpreter(loadModelBuffer(context), options)
+            // GPU (may fail due to missing delegate classes)
+            val gpuClass = Class.forName("org.tensorflow.lite.gpu.GpuDelegate")
+            val gpuDelegate = gpuClass.getDeclaredConstructor().newInstance()
+            val opts = Interpreter.Options().apply { addDelegate(gpuDelegate as org.tensorflow.lite.Delegate) }
+            interpreter = Interpreter(loadModelBuffer(context), opts)
             backend = Backend.GPU
             Log.i(TAG, "Initialized ESRGAN with GPU delegate")
             return
-        } catch (e: Throwable) {
-            Log.w(TAG, "GPU delegate init failed: ${e.message}")
-            safeClose(gpuDelegate)
-            gpuDelegate = null
+        } catch (t: Throwable) {
+            Log.w(TAG, "GPU delegate unavailable: ${t.message}")
             interpreter = null
         }
 
-        // Try NNAPI (API >= 27)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                val nnOptions = Interpreter.Options()
-                nnApiDelegate = NnApiDelegate()
-                nnOptions.addDelegate(nnApiDelegate)
-                interpreter = Interpreter(loadModelBuffer(context), nnOptions)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                val nnApiDelegateClass = Class.forName("org.tensorflow.lite.nnapi.NnApiDelegate")
+                val nn = nnApiDelegateClass.getDeclaredConstructor().newInstance()
+                val nnOpts = Interpreter.Options().apply { addDelegate(nn as org.tensorflow.lite.Delegate) }
+                interpreter = Interpreter(loadModelBuffer(context), nnOpts)
                 backend = Backend.NNAPI
                 Log.i(TAG, "Initialized ESRGAN with NNAPI delegate")
                 return
+            } catch (t: Throwable) {
+                Log.w(TAG, "NNAPI delegate init failed: ${t.message}")
+                interpreter = null
             }
-        } catch (e: Throwable) {
-            Log.w(TAG, "NNAPI delegate init failed: ${e.message}")
-            safeClose(nnApiDelegate)
-            nnApiDelegate = null
-            interpreter = null
         }
 
-        // CPU fallback
         try {
-            val cpuOptions = Interpreter.Options()
+            val cpuOptions = Interpreter.Options().apply {
+                setNumThreads(min(options.cpuMaxThreads, Runtime.getRuntime().availableProcessors().coerceAtLeast(1)))
+            }
             interpreter = Interpreter(loadModelBuffer(context), cpuOptions)
             backend = Backend.CPU
-            Log.i(TAG, "Initialized ESRGAN with CPU backend")
+            Log.i(TAG, "Initialized ESRGAN with generic CPU backend")
         } catch (e: Throwable) {
             Log.e(TAG, "CPU interpreter init failed: ${e.message}")
             interpreter = null
@@ -116,25 +157,19 @@ object EsganUpscaler {
         }
     }
 
-    private fun safeClose(delegate: Delegate?) {
-        try {
-            delegate?.close()
-        } catch (_: Throwable) {
-        }
-    }
-
     private fun loadModelBuffer(context: Context): ByteBuffer {
-        val asset = context.assets.open(MODEL_PATH)
-        val bytes = asset.readBytes()
-        asset.close()
-        return ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
-            put(bytes)
-            rewind()
+        context.assets.open(MODEL_PATH).use { asset ->
+            val bytes = asset.readBytes()
+            return ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
+                put(bytes)
+                rewind()
+            }
         }
     }
 
     /**
-     * Public upscale entrypoint to match or exceed target dims (while preserving aspect).
+     * Public upscale entrypoint to match or exceed target dims (aspect preserved).
+     * Incorporates pre-downscaling strategy when required scale < 4.
      */
     suspend fun upscaleToMatch(
         context: Context,
@@ -154,79 +189,88 @@ object EsganUpscaler {
             targetH.toFloat() / startH.toFloat()
         )
 
-        android.util.Log.d(
-            "ImagePipeline",
-            "phase=esrgan_entry src=${startW}x${startH} target=${targetW}x${targetH} requiredScale=${String.format("%.3f", requiredScale)} threshold=${String.format("%.3f", options.minEsrganScaleThreshold)}"
-        )
+        Log.d(TAG, "phase=esrgan_entry src=${startW}x${startH} target=${targetW}x${targetH} requiredScale=${fmt(requiredScale)} threshold=${fmt(options.minEsrganScaleThreshold)}")
 
         if (startW >= targetW && startH >= targetH) {
-            android.util.Log.d(
-                "ImagePipeline",
-                "phase=esrgan_skip reason=alreadyLarge src=${startW}x${startH} target=${targetW}x${targetH}"
-            )
+            Log.d(TAG, "phase=esrgan_skip reason=alreadyLarge")
             return@withContext src
         }
 
         if (requiredScale < options.minEsrganScaleThreshold) {
-            android.util.Log.d(
-                "ImagePipeline",
-                "phase=esrgan_skip reason=belowThreshold scale=${String.format("%.3f", requiredScale)} threshold=${String.format("%.3f", options.minEsrganScaleThreshold)}"
-            )
+            Log.d(TAG, "phase=esrgan_skip reason=belowThreshold scale=${fmt(requiredScale)}")
             return@withContext bicubicFinal(src, targetW, targetH, sharpen = true)
         }
 
-        if (!ensureReady(context)) {
-            android.util.Log.d(
-                "ImagePipeline",
-                "phase=esrgan_fail reason=interpreterNotReady fallback=bicubic src=${startW}x${startH} target=${targetW}x${targetH}"
-            )
+        if (!ensureReady(context, options)) {
+            Log.d(TAG, "phase=esrgan_fail reason=interpreterNotReady fallback=bicubic")
             return@withContext bicubicFinal(src, targetW, targetH, sharpen = true)
         }
 
-        var current = src
-        val passes = floor(kotlin.math.ln(requiredScale.toDouble()) / kotlin.math.ln(SCALE_FACTOR.toDouble())).toInt().coerceAtLeast(1)
-        val maxUsefulPasses = passes.coerceAtMost(5) // Safety
-        android.util.Log.d(
-            "ImagePipeline",
-            "phase=esrgan_backend backend=$backend requiredScale=${String.format("%.3f", requiredScale)} passes=$passes clamped=$maxUsefulPasses"
-        )
+        // Pre-downscale (Option B) if requiredScale < 4 (single ESRGAN pass enough)
+        var work = src
+        var usedPreScale = false
+        if (requiredScale < SCALE_FACTOR) {
+            val widthMatchFactor = targetW / (startW.toFloat() * SCALE_FACTOR)
+            // Factor < 1 since requiredScale <4
+            var f = widthMatchFactor
+            // Enforce headroom against height overshoot
+            val projectedH = startH * f * SCALE_FACTOR
+            val overshoot = projectedH / targetH.toFloat()
+            if (overshoot > options.preScaleHeadroom) {
+                f /= overshoot / options.preScaleHeadroom
+            }
+            if (f < 0.999f) {
+                val newW = (startW * f).roundToInt().coerceAtLeast(8)
+                val newH = (startH * f).roundToInt().coerceAtLeast(8)
+                work = Bitmap.createScaledBitmap(src, newW, newH, true)
+                usedPreScale = true
+                Log.d(TAG, "phase=prescale applied factor=${fmt(f)} prescaled=${newW}x${newH}")
+            } else {
+                Log.d(TAG, "phase=prescale skipped factor≈1")
+            }
+        }
+
+        // Compute passes (rare multi-pass path kept simple)
+        val passes = if (requiredScale >= 3.2f) {
+            (ln(requiredScale.toDouble()) / ln(SCALE_FACTOR.toDouble())).toInt().coerceAtLeast(1)
+        } else 1
+        val clampedPasses = passes.coerceAtMost(5)
+
+        Log.d(TAG, "phase=esrgan_backend backend=$backend requiredScale=${fmt(requiredScale)} passes=$passes clamped=$clampedPasses prescale=$usedPreScale")
+
+        var current = work
         var fractionalApplied = false
         var artifactApplied = false
 
         val totalMs = measureTimeMillis {
-            repeat(maxUsefulPasses) { passIdx ->
+            repeat(clampedPasses) { idx ->
                 if (current.width >= targetW || current.height >= targetH) return@repeat
+                // Memory guard for this pass
+                val projectedOutW = current.width * SCALE_FACTOR
+                val projectedOutH = current.height * SCALE_FACTOR
+                if (!memorySafe(projectedOutW, projectedOutH, options)) {
+                    Log.w(TAG, "phase=memory_guard triggered out=${projectedOutW}x${projectedOutH} skip_esrgan")
+                    return@repeat
+                }
                 val passMs = measureTimeMillis {
                     current = runSinglePass(current, options)
                 }
-                android.util.Log.d(
-                    "ImagePipeline",
-                    "phase=esrgan_pass idx=${passIdx + 1}/$maxUsefulPasses out=${current.width}x${current.height} ms=${passMs}"
-                )
+                Log.d(TAG, "phase=esrgan_pass idx=${idx + 1}/$clampedPasses out=${current.width}x${current.height} ms=$passMs")
             }
 
-            // Fractional residual scale if still below target
-            if (current.width < targetW || current.height < targetH) {
-                android.util.Log.d(
-                    "ImagePipeline",
-                    "phase=esrgan_fractional start=${current.width}x${current.height} target=${targetW}x${targetH}"
-                )
+            // Final upscale / downscale to target if needed
+            if (current.width < targetW || current.height < targetH ||
+                current.width > targetW || current.height > targetH
+            ) {
                 val fracMs = measureTimeMillis {
-                    current = bicubicFinal(current, targetW, targetH, sharpen = false)
+                    current = bicubicFinal(current, targetW, targetH, sharpen = (current.width > targetW * 1.05f || current.height > targetH * 1.05f))
                 }
                 fractionalApplied = true
-                android.util.Log.d(
-                    "ImagePipeline",
-                    "phase=esrgan_fractional_done out=${current.width}x${current.height} ms=${fracMs}"
-                )
+                Log.d(TAG, "phase=esrgan_fractional_done out=${current.width}x${current.height} ms=$fracMs")
             }
 
-            // Swirl suppression / artifact reduction
+            // Post-process (artifact suppression)
             if (options.swirlSuppression > 0f || options.enableArtifactDenoise) {
-                android.util.Log.d(
-                    "ImagePipeline",
-                    "phase=esrgan_artifact start=${current.width}x${current.height} swirl=${options.swirlSuppression} denoise=${options.enableArtifactDenoise}"
-                )
                 val artMs = measureTimeMillis {
                     current = swirlSuppress(
                         originalSmall = src,
@@ -236,54 +280,65 @@ object EsganUpscaler {
                     )
                 }
                 artifactApplied = true
-                android.util.Log.d(
-                    "ImagePipeline",
-                    "phase=esrgan_artifact_done out=${current.width}x${current.height} ms=${artMs}"
-                )
+                Log.d(TAG, "phase=esrgan_artifact_done out=${current.width}x${current.height} ms=$artMs")
             }
         }
 
-        android.util.Log.d(
-            "ImagePipeline",
-            "phase=esrgan_complete final=${current.width}x${current.height} totalMs=${totalMs} passes=$passes clamped=$maxUsefulPasses fracApplied=${fractionalApplied} artifactApplied=${artifactApplied} backend=$backend"
-        )
+        Log.d(TAG, "phase=esrgan_complete final=${current.width}x${current.height} totalMs=$totalMs passes=$passes clamped=$clampedPasses fracApplied=$fractionalApplied artifactApplied=$artifactApplied backend=$backend")
+        if (usedPreScale && current !== src && src !== current && !src.isRecycled) {
+            // Keep original for potential reuse elsewhere; do not recycle here unless safe.
+        }
         current
     }
 
+    private fun memorySafe(outW: Int, outH: Int, options: EsganOptions): Boolean {
+        if (!options.adaptiveMemoryGuard) return true
+        val pixels = outW.toLong() * outH.toLong()
+        // Approx bytes: rAcc+gAcc+bAcc (12) + weight (2) + output bitmap (4) = 18 bytes/px
+        val bytes = pixels * 18L
+        val mb = bytes / (1024.0 * 1024.0)
+        val safe = mb <= options.maxOutputMegabytes
+        Log.d(TAG, "phase=memory_estimate out=${outW}x${outH} estMB=${fmt(mb.toFloat())} limit=${options.maxOutputMegabytes} safe=$safe")
+        return safe
+    }
+
     /**
-     * Single 4x ESRGAN tiled inference pass.
+     * Single ESRGAN 4x tiled pass with quantized weight accumulation.
      */
-    private fun runSinglePass(
-        input: Bitmap,
-        options: EsganOptions
-    ): Bitmap {
+    private fun runSinglePass(input: Bitmap, options: EsganOptions): Bitmap {
         val interp = interpreter ?: return input
         val scale = SCALE_FACTOR
-        var tileSize = options.tileSize
         val overlap = options.tileOverlap
+        var tileSize = options.initialTileSize.coerceAtMost(options.tileSize)
+
+        // Pre-adjust tile size if estimated per-tile memory is too high
+        tileSize = adjustInitialTileSize(tileSize, overlap, options)
 
         val inW = input.width
         val inH = input.height
         val outW = inW * scale
         val outH = inH * scale
 
-        var outBitmap: Bitmap? = null
+        // Accumulators
+        val rAcc = IntArray(outW * outH)
+        val gAcc = IntArray(outW * outH)
+        val bAcc = IntArray(outW * outH)
+        val weight = ShortArray(outW * outH)
+
         var attempt = 0
         var success = false
         var lastError: Throwable? = null
+        var outBitmap: Bitmap? = null
 
         while (attempt < options.maxRetries && !success) {
             try {
                 outBitmap?.recycle()
                 outBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
 
-                val accumulator = IntArray(outW * outH)
-                val weightMap = FloatArray(outW * outH)
-
-                val tilesX = ceil(inW / tileSize.toFloat()).toInt()
-                val tilesY = ceil(inH / tileSize.toFloat()).toInt()
-
+                var tilesX = ceil(inW / tileSize.toFloat()).toInt()
+                var tilesY = ceil(inH / tileSize.toFloat()).toInt()
                 var tileCount = 0
+
                 val tileMsTotal = measureTimeMillis {
                     for (ty in 0 until tilesY) {
                         for (tx in 0 until tilesX) {
@@ -328,15 +383,19 @@ object EsganUpscaler {
                             val outInnerW = innerW * scale
                             val outInnerH = innerH * scale
 
-                            blendTile(
+                            blendTileQuantized(
                                 srTile,
                                 outInnerX0,
                                 outInnerY0,
                                 outInnerW,
                                 outInnerH,
                                 overlap * scale,
-                                accumulator,
-                                weightMap,
+                                padLeft * scale,
+                                padTop * scale,
+                                rAcc,
+                                gAcc,
+                                bAcc,
+                                weight,
                                 outW,
                                 outH
                             )
@@ -345,22 +404,20 @@ object EsganUpscaler {
                         }
                     }
                 }
-                Log.d(TAG, "Tiled pass tiles=$tileCount in ${tileMsTotal}ms (tileSize=$tileSize overlap=$overlap)")
+                Log.d(TAG, "phase=tiled_pass tiles=$tileCount ms=$tileMsTotal tileSize=$tileSize overlap=$overlap")
 
-                // Normalize accumulated pixels by weights
+                // Compose final pixels
                 val outPixels = IntArray(outW * outH)
                 for (i in outPixels.indices) {
-                    val w = weightMap[i]
-                    if (w > 0f) {
-                        val c = accumulator[i]
-                        val a = (c ushr 24) and 0xFF
-                        val r = (c ushr 16) and 0xFF
-                        val g = (c ushr 8) and 0xFF
-                        val b = c and 0xFF
-                        val nr = (r / w).roundToInt().coerceIn(0, 255)
-                        val ng = (g / w).roundToInt().coerceIn(0, 255)
-                        val nb = (b / w).roundToInt().coerceIn(0, 255)
-                        outPixels[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
+                    val wq = weight[i].toInt()
+                    if (wq > 0) {
+                        val wr = rAcc[i] / wq
+                        val wg = gAcc[i] / wq
+                        val wb = bAcc[i] / wq
+                        outPixels[i] = (0xFF shl 24) or
+                                (wr.coerceIn(0, 255) shl 16) or
+                                (wg.coerceIn(0, 255) shl 8) or
+                                wb.coerceIn(0, 255)
                     } else {
                         outPixels[i] = 0xFF000000.toInt()
                     }
@@ -369,17 +426,12 @@ object EsganUpscaler {
                 success = true
             } catch (oom: OutOfMemoryError) {
                 lastError = oom
-                tileSize = when {
-                    tileSize > 192 -> 192
-                    tileSize > 160 -> 160
-                    tileSize > 128 -> 128
-                    else -> tileSize / 2
-                }.coerceAtLeast(64)
-                Log.w(TAG, "OOM on pass tileSize try $attempt; reducing tileSize -> $tileSize")
+                tileSize = reduceTileSize(tileSize, options)
+                Log.w(TAG, "OOM tileSize attempt=$attempt newTileSize=$tileSize")
                 System.gc()
-            } catch (e: Throwable) {
-                lastError = e
-                Log.e(TAG, "Tile inference error: ${e.message}")
+            } catch (t: Throwable) {
+                lastError = t
+                Log.e(TAG, "Tile inference error: ${t.message}")
                 break
             }
             attempt++
@@ -390,12 +442,33 @@ object EsganUpscaler {
             outBitmap?.recycle()
             return input
         }
-
         return outBitmap!!
     }
 
+    private fun adjustInitialTileSize(tile: Int, overlap: Int, options: EsganOptions): Int {
+        var t = tile
+        while (t >= options.minTileSize) {
+            val crop = t + 2 * overlap
+            val inFloats = crop * crop * 3
+            val outFloats = (crop * SCALE_FACTOR) * (crop * SCALE_FACTOR) * 3
+            val bytes = 4L * (inFloats + outFloats)
+            if (bytes / (1024 * 1024) < 32) break
+            t -= 32
+        }
+        return t
+    }
+
+    private fun reduceTileSize(current: Int, options: EsganOptions): Int {
+        return when {
+            current > 192 -> 192
+            current > 160 -> 160
+            current > options.minTileSize -> max(options.minTileSize, 128)
+            else -> options.minTileSize
+        }
+    }
+
     /**
-     * Run full model on single tile.
+     * Model invocation on a single tile.
      */
     private fun runModel(interp: Interpreter, tile: Bitmap): Bitmap {
         val inW = tile.width
@@ -407,61 +480,63 @@ object EsganUpscaler {
         val inputShape = inputTensor.shape()
         val expectedH = inputShape.getOrNull(1) ?: inH
         val expectedW = inputShape.getOrNull(2) ?: inW
-        // If model is fully dynamic dims we proceed; else ensure match or resize
-        val modelDynamic = (expectedH == -1 || expectedW == -1)
+        val dynamic = (expectedH == -1 || expectedW == -1)
 
-        val workBitmap = if (!modelDynamic && (expectedW != inW || expectedH != inH)) {
+        val workBitmap = if (!dynamic && (expectedW != inW || expectedH != inH)) {
             Bitmap.createScaledBitmap(tile, expectedW, expectedH, true)
-        } else {
-            tile
-        }
+        } else tile
 
         val w = workBitmap.width
         val h = workBitmap.height
 
-        val inputBuffer =
-            ByteBuffer.allocateDirect(4 * w * h * 3).order(ByteOrder.nativeOrder())
+        val neededInputBytes = 4 * w * h * 3
+        if (neededInputBytes > inputCap) {
+            inputBuffer = ByteBuffer.allocateDirect(neededInputBytes).order(ByteOrder.nativeOrder())
+            inputCap = neededInputBytes
+        }
+        val inBuf = inputBuffer!!
+        inBuf.rewind()
+
         val intPixels = IntArray(w * h)
         workBitmap.getPixels(intPixels, 0, w, 0, 0, w, h)
-        // Normalize to [0,1]
         var idx = 0
         for (py in 0 until h) {
             for (px in 0 until w) {
                 val c = intPixels[idx++]
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                inputBuffer.putFloat(r / 255f)
-                inputBuffer.putFloat(g / 255f)
-                inputBuffer.putFloat(b / 255f)
+                inBuf.putFloat(((c shr 16) and 0xFF) / 255f)
+                inBuf.putFloat(((c shr 8) and 0xFF) / 255f)
+                inBuf.putFloat((c and 0xFF) / 255f)
             }
         }
-        inputBuffer.rewind()
+        inBuf.rewind()
 
-        val outputBuffer =
-            ByteBuffer.allocateDirect(4 * outW * outH * 3).order(ByteOrder.nativeOrder())
-        outputBuffer.rewind()
+        val neededOutBytes = 4 * outW * outH * 3
+        if (neededOutBytes > outputCap) {
+            outputBuffer = ByteBuffer.allocateDirect(neededOutBytes).order(ByteOrder.nativeOrder())
+            outputCap = neededOutBytes
+        }
+        val outBuf = outputBuffer!!
+        outBuf.rewind()
 
-        // If dynamic, try resizing
-        try {
-            if (modelDynamic) {
+        if (dynamic) {
+            try {
                 interp.resizeInput(0, intArrayOf(1, h, w, 3))
                 interp.allocateTensors()
+            } catch (t: Throwable) {
+                Log.w(TAG, "resizeInput failed: ${t.message}")
             }
-        } catch (e: Throwable) {
-            Log.w(TAG, "ResizeInput failed (maybe static shape); proceeding: ${e.message}")
         }
 
-        interp.run(inputBuffer, outputBuffer)
-        outputBuffer.rewind()
+        interp.run(inBuf, outBuf)
+        outBuf.rewind()
 
         val outPixels = IntArray(outW * outH)
         idx = 0
         for (py in 0 until outH) {
             for (px in 0 until outW) {
-                val rf = outputBuffer.getFloat().coerceIn(0f, 1f)
-                val gf = outputBuffer.getFloat().coerceIn(0f, 1f)
-                val bf = outputBuffer.getFloat().coerceIn(0f, 1f)
+                val rf = outBuf.getFloat().coerceIn(0f, 1f)
+                val gf = outBuf.getFloat().coerceIn(0f, 1f)
+                val bf = outBuf.getFloat().coerceIn(0f, 1f)
                 val r = (rf * 255f + 0.5f).toInt().coerceIn(0, 255)
                 val g = (gf * 255f + 0.5f).toInt().coerceIn(0, 255)
                 val b = (bf * 255f + 0.5f).toInt().coerceIn(0, 255)
@@ -469,7 +544,7 @@ object EsganUpscaler {
             }
         }
 
-        if (workBitmap != tile) workBitmap.recycle()
+        if (workBitmap !== tile) workBitmap.recycle()
 
         val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
         out.setPixels(outPixels, 0, outW, 0, 0, outW, outH)
@@ -477,17 +552,21 @@ object EsganUpscaler {
     }
 
     /**
-     * Blend tile into accumulator with linear feather edges over overlap distance.
+     * Quantized blend with Short weight map.
      */
-    private fun blendTile(
+    private fun blendTileQuantized(
         tile: Bitmap,
         outX: Int,
         outY: Int,
         innerW: Int,
         innerH: Int,
         overlapPx: Int,
-        acc: IntArray,
-        weight: FloatArray,
+        padLeftPx: Int,
+        padTopPx: Int,
+        rAcc: IntArray,
+        gAcc: IntArray,
+        bAcc: IntArray,
+        weight: ShortArray,
         fullW: Int,
         fullH: Int
     ) {
@@ -496,53 +575,50 @@ object EsganUpscaler {
         val pixels = IntArray(tW * tH)
         tile.getPixels(pixels, 0, tW, 0, 0, tW, tH)
 
-        // region inside tile to copy (corresponding to inner region)
-        val startX = (tW - innerW) / 2
-        val startY = (tH - innerH) / 2
+        // Corrected start offsets: use actual padded margins (scaled) instead of centering heuristic
+        val startX = padLeftPx.coerceIn(0, tW - 1)
+        val startY = padTopPx.coerceIn(0, tH - 1)
 
         for (y in 0 until innerH) {
             val gy = outY + y
             if (gy !in 0 until fullH) continue
             val ty = startY + y
+            val rowOffset = gy * fullW
             for (x in 0 until innerW) {
                 val gx = outX + x
                 if (gx !in 0 until fullW) continue
                 val tx = startX + x
                 val c = pixels[ty * tW + tx]
 
-                // Weight based on distance to inner edge
                 val distX = min(x, innerW - 1 - x)
                 val distY = min(y, innerH - 1 - y)
                 val dist = min(distX, distY)
-                val wEdge = if (overlapPx > 0) {
-                    min(1f, dist / overlapPx.toFloat())
-                } else 1f
-                val w = wEdge
+                val wEdge = if (overlapPx > 0) min(1f, dist / overlapPx.toFloat()) else 1f
+                val wInc = (wEdge * WEIGHT_SCALE).toInt().coerceAtLeast(1)
+                val idx = rowOffset + gx
 
-                val idx = gy * fullW + gx
-                val existing = acc[idx]
-                val wr = weight[idx]
-
-                val a = (c ushr 24) and 0xFF
-                val r = (c ushr 16) and 0xFF
-                val g = (c ushr 8) and 0xFF
+                val existingW = weight[idx].toInt()
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
 
-                if (wr == 0f) {
-                    acc[idx] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                if (existingW == 0) {
+                    rAcc[idx] = r * wInc
+                    gAcc[idx] = g * wInc
+                    bAcc[idx] = b * wInc
+                    weight[idx] = (wInc.coerceAtMost(Short.MAX_VALUE.toInt())).toShort()
                 } else {
-                    val er = (existing shr 16) and 0xFF
-                    val eg = (existing shr 8) and 0xFF
-                    val eb = existing and 0xFF
-                    val nr = er + r * w
-                    val ng = eg + g * w
-                    val nb = eb + b * w
-                    acc[idx] = (0xFF shl 24) or (nr.toInt() shl 16) or (ng.toInt() shl 8) or nb.toInt()
+                    val newW = (existingW + wInc).coerceAtMost(Short.MAX_VALUE.toInt())
+                    rAcc[idx] += r * wInc
+                    gAcc[idx] += g * wInc
+                    bAcc[idx] += b * wInc
+                    weight[idx] = newW.toShort()
                 }
-                weight[idx] = wr + w
             }
         }
     }
+
+    // --- Artifact suppression (unchanged from original except for minor style tweaks) ---
 
     private fun swirlSuppress(
         originalSmall: Bitmap,
@@ -554,7 +630,6 @@ object EsganUpscaler {
         val outW = upscaled.width
         val outH = upscaled.height
 
-        // Bicubic upscale original for guidance
         val guide = Bitmap.createScaledBitmap(originalSmall, outW, outH, true)
 
         val esPixels = IntArray(outW * outH)
@@ -563,17 +638,11 @@ object EsganUpscaler {
         guide.getPixels(guidePixels, 0, outW, 0, 0, outW, outH)
 
         val result = IntArray(outW * outH)
-
-        // Precompute blurred variant (simple 3x3 box as approximation)
         val blurred = boxBlur3x3(esPixels, outW, outH)
-        // Mix with guide 30%
+
         for (i in esPixels.indices) {
-            val e = esPixels[i]
             val g = guidePixels[i]
             val b = blurred[i]
-            val er = (e shr 16) and 0xFF
-            val eg = (e shr 8) and 0xFF
-            val eb = e and 0xFF
             val gr = (g shr 16) and 0xFF
             val gg = (g shr 8) and 0xFF
             val gb = g and 0xFF
@@ -586,14 +655,11 @@ object EsganUpscaler {
             blurred[i] = (0xFF shl 24) or (mr.toInt() shl 16) or (mg.toInt() shl 8) or mb.toInt()
         }
 
-        // Sobel gradients on upscaled
         val grad = sobelGradientMagnitude(esPixels, outW, outH)
-
-        val k = SOBEL_K
         for (i in esPixels.indices) {
             val mag = grad[i]
-            val mask = (mag / (mag + k)).coerceIn(0f, 1f)
-            val blendMask = (mask * (1f - strength) + mask * strength) // keep strong edges, reduce low freq
+            val mask = (mag / (mag + SOBEL_K)).coerceIn(0f, 1f)
+            val blendMask = mask * (1f - strength) + mask * strength
             val e = esPixels[i]
             val s = blurred[i]
             val er = (e shr 16) and 0xFF
@@ -620,6 +686,20 @@ object EsganUpscaler {
 
     private fun boxBlur3x3(pixels: IntArray, w: Int, h: Int): IntArray {
         val out = IntArray(pixels.size)
+        // Copy edges directly to avoid uninitialized (black) borders
+        if (w > 1 && h > 1) {
+            for (x in 0 until w) {
+                out[x] = pixels[x]
+                out[(h - 1) * w + x] = pixels[(h - 1) * w + x]
+            }
+            for (y in 0 until h) {
+                out[y * w] = pixels[y * w]
+                out[y * w + (w - 1)] = pixels[y * w + (w - 1)]
+            }
+        } else {
+            // Degenerate small image
+            return pixels.copyOf()
+        }
         for (y in 1 until h - 1) {
             for (x in 1 until w - 1) {
                 var r = 0; var g = 0; var b = 0
@@ -668,7 +748,6 @@ object EsganUpscaler {
     }
 
     private fun medianLowGradient(pixels: IntArray, grad: FloatArray, w: Int, h: Int) {
-        val window = IntArray(9)
         fun median9(arr: IntArray): Int {
             for (i in 1 until 9) {
                 val v = arr[i]
@@ -686,7 +765,6 @@ object EsganUpscaler {
                 val idx = y * w + x
                 if (grad[idx] >= LOW_GRAD_THRESHOLD) continue
                 var k = 0
-                var rr = 0; var gg = 0; var bb = 0
                 val rArr = IntArray(9)
                 val gArr = IntArray(9)
                 val bArr = IntArray(9)
@@ -711,7 +789,6 @@ object EsganUpscaler {
     private fun bicubicFinal(src: Bitmap, targetW: Int, targetH: Int, sharpen: Boolean): Bitmap {
         val scaled = Bitmap.createScaledBitmap(src, targetW, targetH, true)
         if (!sharpen) return scaled
-        // light unsharp
         val out = scaled.copy(Bitmap.Config.ARGB_8888, true)
         val w = out.width
         val h = out.height
@@ -753,20 +830,18 @@ object EsganUpscaler {
         return out
     }
 
-    private fun log2(value: Float): Float = (kotlin.math.ln(value.toDouble()) / kotlin.math.ln(2.0)).toFloat()
-
-    
+    private fun fmt(v: Float): String = String.format("%.3f", v)
 
     fun release() {
         synchronized(lock) {
             interpreter?.close()
             interpreter = null
-            safeClose(gpuDelegate)
-            safeClose(nnApiDelegate)
-            gpuDelegate = null
-            nnApiDelegate = null
             backend = Backend.NONE
             initTried = false
+            inputBuffer = null
+            outputBuffer = null
+            inputCap = 0
+            outputCap = 0
         }
     }
 }
