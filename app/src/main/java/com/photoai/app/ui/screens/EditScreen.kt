@@ -132,9 +132,10 @@ fun EditScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.Start,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Back
                     IconButton(
                         onClick = onBackClick,
                         enabled = !viewModel.isAnyLoading.value
@@ -142,13 +143,14 @@ fun EditScreen(
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
                             contentDescription = "Back",
-                            tint = if (viewModel.isAnyLoading.value) 
+                            tint = if (viewModel.isAnyLoading.value)
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                            else 
+                            else
                                 MaterialTheme.colorScheme.primary
                         )
                     }
-                    
+                    Spacer(modifier = Modifier.width(4.dp))
+                    // Settings
                     IconButton(
                         onClick = onSettingsClick,
                         enabled = !viewModel.isAnyLoading.value
@@ -158,6 +160,62 @@ fun EditScreen(
                             contentDescription = "Settings",
                             tint = MaterialTheme.colorScheme.primary
                         )
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    // Person count / detection status chips
+                    when {
+                        viewModel.isLoadingPersonCount.value -> {
+                            AssistChip(
+                                onClick = {},
+                                enabled = false,
+                                label = { Text("Detecting...") },
+                                leadingIcon = {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                }
+                            )
+                        }
+                        viewModel.personCountError.value != null -> {
+                            AssistChip(
+                                onClick = { if (!viewModel.isAnyLoading.value) viewModel.retryPersonDetection() },
+                                label = { Text("Retry detection") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Retry"
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    labelColor = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            )
+                        }
+                        viewModel.personCount.value != null -> {
+                            val count = viewModel.personCount.value!!
+                            AssistChip(
+                                onClick = { /* reserved for future manual override dialog */ },
+                                label = { Text("People: $count") },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = if (count > 1)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.secondaryContainer,
+                                    labelColor = if (count > 1)
+                                        MaterialTheme.colorScheme.onPrimary
+                                    else
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                ),
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = if (count > 1) Icons.Default.Group else Icons.Default.Person,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -201,6 +259,7 @@ fun EditScreen(
                         Box(
                             modifier = Modifier.fillMaxSize()
                         ) {
+                            val dims = viewModel.currentImageDimensions.value
                             HorizontalPager(
                                 state = pagerState,
                                 modifier = Modifier.fillMaxSize()
@@ -213,6 +272,22 @@ fun EditScreen(
                                         contentScale = ContentScale.Fit
                                     )
                                 }
+                            }
+
+                            if (dims != null) {
+                                Text(
+                                    text = "${dims.first} x ${dims.second}",
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(12.dp)
+                                        .background(
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
                             }
 
                             // Add page indicator if we have both images

@@ -21,6 +21,9 @@ import androidx.lifecycle.viewModelScope
 import com.photoai.app.api.OpenAIService
 import com.photoai.app.utils.PromptsLoader
 import com.photoai.app.utils.urlToBitmap
+import com.photoai.app.ml.EsganUpscaler
+import com.photoai.app.ml.EsganOptions
+import com.photoai.app.utils.PreparedImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -100,6 +103,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var customPrompt = mutableStateOf("")
         private set
 
+    // Currently displayed image dimensions (original or edited)
+    var currentImageDimensions = mutableStateOf<Pair<Int, Int>?>(null)
+        private set
+
+    // Persist original (selected) source image dimensions for all subsequent iterative edits
+    private var originalBaseDimensions: Pair<Int, Int>? = null
+
     // Track the currently selected category and prompt name
     private var currentCategory: String? = null
     private var currentPromptName: String? = null
@@ -111,6 +121,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Parallel list of user-entered prompts for each edited image (not including base prompt)
     var editedImagePrompts = mutableStateOf(listOf<String>())
         private set
+
+    // Parallel list of padded (base-size) data URLs for iterative stability
+    var paddedEditedImages = mutableStateOf(listOf<String>())
+        private set
+
+    // Base preparation metadata (stable frame) captured on first edit
+    var basePreparedMeta: PreparedImage? = null
 
     var isProcessing = mutableStateOf(false)
         private set
@@ -146,9 +163,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSelectedImage(uri: Uri?) {
         selectedImageUri.value = uri
+        originalBaseDimensions = uri?.let { getImageDimensions(getApplication(), it) }
         // Clear previous results when new image is selected
         editedImageUrls.value = emptyList()
         editedImagePrompts.value = emptyList()
+        paddedEditedImages.value = emptyList()
+        basePreparedMeta = null
         errorMessage.value = null
         currentPage.value = 0
         saveMessage.value = null
@@ -160,6 +180,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentScreen.value = Screen.Edit(it)
             detectPersonCount(it)
         }
+        updateCurrentImageDimensions()
     }
 
     private fun detectPersonCount(uri: Uri) {
@@ -218,6 +239,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 releaseWakeLock()
             }
         }
+    }
+
+    fun retryPersonDetection() {
+        val uri = selectedImageUri.value ?: return
+        if (isLoadingPersonCount.value) return
+        personCountError.value = null
+        detectPersonCount(uri)
     }
 
     fun navigateToSettings() {
@@ -462,6 +490,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setCurrentPage(page: Int) {
         currentPage.value = page
+        updateCurrentImageDimensions()
     }
 
     fun toggleFullScreenMode() {
@@ -476,6 +505,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             selectedImageUri.value
         } else {
             editedImageUrls.value.getOrNull(currentPage.value - 1)?.let { Uri.parse(it) }
+        }
+    }
+
+    /**
+     * Update currently displayed image dimensions (original or edited).
+     * Network (http/https) URIs are decoded off main thread.
+     */
+    fun updateCurrentImageDimensions() {
+        val uri = getCurrentImageUri()
+        if (uri == null) {
+            currentImageDimensions.value = null
+            return
+        }
+        if (uri.scheme == "http" || uri.scheme == "https") {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val bmp = urlToBitmap(uri.toString())
+                    val dims = bmp?.let { Pair(it.width, it.height) }
+                    withContext(Dispatchers.Main) {
+                        currentImageDimensions.value = dims
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        currentImageDimensions.value = null
+                    }
+                }
+            }
+        } else {
+            currentImageDimensions.value = getImageDimensions(getApplication(), uri)
         }
     }
 
@@ -540,10 +598,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Editing original: clear all history
             editedImageUrls.value = emptyList()
             editedImagePrompts.value = emptyList()
+            paddedEditedImages.value = emptyList()
+            basePreparedMeta = null
         } else if (currentPage.value != editedImageUrls.value.size) {
             // Editing an intermediate edit: truncate newer edits
             editedImageUrls.value = editedImageUrls.value.take(currentPage.value)
-            editedImagePrompts.value = editedImagePrompts.value.take(currentPage.value - 0) // prompts align with edits
+            editedImagePrompts.value = editedImagePrompts.value.take(currentPage.value)
+            paddedEditedImages.value = paddedEditedImages.value.take(currentPage.value)
         }
         // Invalidate existing slideshow if any
         slideshowVideoUri.value = null
@@ -573,6 +634,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isProcessing.value = true
                 // Capture original/base image dimensions (used for upscaling edited result)
                 val baseDimensions = getImageDimensions(context, uri)
+                val targetDimensions = if (isEditingEditedImage) {
+                    // Use original source size (if known) when iterating on an edited image
+                    originalBaseDimensions ?: baseDimensions
+                } else {
+                    baseDimensions
+                }
 
                 // Acquire wake lock to prevent screen from sleeping
                 acquireWakeLock(context)
@@ -589,38 +656,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val effectiveQuality = if (isEditingEditedImage) "high" else quality.value
                 val effectiveDownsizeImage = if (isEditingEditedImage) false else downsizeImages.value
 
-                val result = openAIService.editImage(
+                // Decide source mode: first edit uses Uri, iterative uses padded previous
+                val paddedInput: String? = if (isEditingEditedImage) {
+                    paddedEditedImages.value.getOrNull(currentPage.value - 1)
+                } else null
+                if (isEditingEditedImage && paddedInput == null) {
+                    throw IllegalStateException("Missing padded input for iterative edit")
+                }
+
+                val advancedResult = openAIService.editImageAdvanced(
                     context = context,
-                    uri = uri,
+                    uri = if (paddedInput == null) uri else null,
                     prompt = fullPrompt,
-                    downsizeImage = effectiveDownsizeImage,
                     inputFidelity = effectiveInputFidelity,
                     quality = effectiveQuality,
-                    isEditingEditedImage = isEditingEditedImage
+                    isEditingEditedImage = isEditingEditedImage,
+                    paddedInputDataUrl = paddedInput,
+                    previousMeta = basePreparedMeta,
+                    returnBoth = true,
+                    returnPaddedOnly = false
                 )
 
-                result.fold(
-                    onSuccess = { imageUrl ->
-                        android.util.Log.d("MainViewModel", "Received image URL: ${imageUrl.take(100)}...")
+                advancedResult.fold(
+                    onSuccess = { editRes ->
+                        android.util.Log.d("MainViewModel", "Received image URL (restored): ${editRes.restoredDataUrl.take(80)}...")
+                        // Capture base meta first time
+                        if (basePreparedMeta == null) {
+                            basePreparedMeta = editRes.meta
+                        }
+                        // Append padded (for future edits) AFTER branching logic already truncated
+                        paddedEditedImages.value = paddedEditedImages.value + editRes.paddedDataUrl
 
-                        // If it's a data URL, convert it to a temporary file for better Coil compatibility
-                        if (imageUrl.startsWith("data:image/")) {
-                            viewModelScope.launch {
+                        val restoredUrl = editRes.restoredDataUrl
+                        if (restoredUrl.startsWith("data:image/")) {
+                            try {
+                                loadingMessage.value = "Applying magic (finalizing)"
                                 val tempFileUri = convertDataUrlToTempFile(
                                     context = context,
-                                    dataUrl = imageUrl,
-                                    targetWidth = baseDimensions?.first,
-                                    targetHeight = baseDimensions?.second
+                                    dataUrl = restoredUrl,
+                                    targetWidth = targetDimensions?.first,
+                                    targetHeight = targetDimensions?.second,
+                                    allowUpscale = !isEditingEditedImage // skip expensive upscale mid-iteration
                                 )
-                                val finalUriStr = tempFileUri?.toString() ?: imageUrl
+                                val finalUriStr = tempFileUri?.toString() ?: restoredUrl
                                 appendNewEditedImage(finalUriStr, userEnteredPrompt)
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainViewModel", "Post-process failed: ${e.message}")
+                                appendNewEditedImage(restoredUrl, userEnteredPrompt)
+                            } finally {
+                                if (loadingMessage.value?.startsWith("Applying magic") == true) {
+                                    loadingMessage.value = null
+                                }
                             }
                         } else {
-                            appendNewEditedImage(imageUrl, userEnteredPrompt)
+                            appendNewEditedImage(restoredUrl, userEnteredPrompt)
                         }
                     },
-                    onFailure = { exception ->
-                        errorMessage.value = exception.message ?: "An error occurred while editing the image"
+                    onFailure = { ex ->
+                        errorMessage.value = ex.message ?: "An error occurred while editing the image"
                     }
                 )
             } catch (e: Exception) {
@@ -638,6 +731,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentPage.value = editedImageUrls.value.size // move to newest page
         // invalidate slideshow
         slideshowVideoUri.value = null
+        updateCurrentImageDimensions()
     }
 
     fun saveEditedImage(context: Context, bitmap: Bitmap) {
@@ -660,6 +754,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun saveImageToGallery(context: Context, bitmap: Bitmap): Boolean {
         return try {
+            // Ensure export is at original resolution if initial prepare() downscaled.
+            val exportBitmap = upscaleForExportIfNeeded(context, bitmap)
+
             val contentValues = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, "edited_image_${System.currentTimeMillis()}.jpg")
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -673,7 +770,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             uri?.let {
                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                    exportBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                 }
                 true
             } ?: false
@@ -686,21 +783,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         context: Context,
         dataUrl: String,
         targetWidth: Int? = null,
-        targetHeight: Int? = null
+        targetHeight: Int? = null,
+        allowUpscale: Boolean = true
     ): Uri? {
         return withContext(Dispatchers.IO) {
             try {
                 val base64Data = dataUrl.substringAfter("base64,")
                 val decodedBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                 var bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                if (bitmap != null) {
+                    android.util.Log.d(
+                        "ImagePipeline",
+                        "phase=convertDataUrl decode=${bitmap.width}x${bitmap.height} target=${targetWidth ?: -1}x${targetHeight ?: -1}"
+                    )
+                }
 
                 if (bitmap != null) {
                     // Attempt upscale if original/base dimensions are larger
                     if (targetWidth != null && targetHeight != null) {
-                        val upscaled = upscaleMultiStepSharpen(bitmap, targetWidth, targetHeight)
-                        if (upscaled != bitmap) {
-                            bitmap.recycle()
-                            bitmap = upscaled
+                        // Try ESRGAN 2x multi-pass upscale first (tiled, artifact-suppressed)
+                        if (allowUpscale && (targetWidth > bitmap.width || targetHeight > bitmap.height)) {
+                            android.util.Log.d(
+                                "ImagePipeline",
+                                "phase=convertDataUrl_esrgan_attempt src=${bitmap.width}x${bitmap.height} target=${targetWidth}x${targetHeight}"
+                            )
+                            try {
+                                val t0 = System.currentTimeMillis()
+                                android.util.Log.d("ImagePipeline","phase=convertDataUrl_esrgan opts=artifactDenoise=false")
+                                val esr = EsganUpscaler.upscaleToMatch(
+                                    context = context,
+                                    src = bitmap,
+                                    targetW = targetWidth,
+                                    targetH = targetHeight,
+                                    options = EsganOptions(enableArtifactDenoise = false)
+                                )
+                                if (esr != bitmap) {
+                                    bitmap.recycle()
+                                    bitmap = esr
+                                    android.util.Log.d(
+                                        "ImagePipeline",
+                                        "phase=convertDataUrl_esrgan_success ms=${System.currentTimeMillis() - t0} out=${bitmap.width}x${bitmap.height}"
+                                    )
+                                } else {
+                                    android.util.Log.d(
+                                        "ImagePipeline",
+                                        "phase=convertDataUrl_esrgan_noop srcAlready=${bitmap.width}x${bitmap.height}"
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.w("MainViewModel", "ESRGAN upscale failed: ${e.message}; falling back to legacy path")
+                                android.util.Log.d(
+                                    "ImagePipeline",
+                                    "phase=convertDataUrl_esrgan_fail reason=${e.message ?: "error"}"
+                                )
+                                // Fallback legacy heuristic upscale
+                                try {
+                                    val legacy = upscaleMultiStepSharpen(bitmap, targetWidth, targetHeight)
+                                    if (legacy != bitmap) {
+                                        bitmap.recycle()
+                                        bitmap = legacy
+                                        android.util.Log.d(
+                                            "ImagePipeline",
+                                            "phase=convertDataUrl_legacy_success out=${bitmap.width}x${bitmap.height}"
+                                        )
+                                    } else {
+                                        android.util.Log.d(
+                                            "ImagePipeline",
+                                            "phase=convertDataUrl_legacy_noop unchanged=${bitmap.width}x${bitmap.height}"
+                                        )
+                                    }
+                                } catch (e2: Exception) {
+                                    android.util.Log.e("MainViewModel", "Legacy upscale failed: ${e2.message}")
+                                }
+                            }
                         }
                     }
 
@@ -709,7 +864,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                     }
                     bitmap.recycle()
-                    android.util.Log.d("MainViewModel", "Created temp file (possibly upscaled): ${tempFile.absolutePath}")
+                    val fileBytes = tempFile.length()
+                    android.util.Log.d(
+                        "ImagePipeline",
+                        "phase=convertDataUrl_final final=${bitmap.width}x${bitmap.height} fileBytes=${fileBytes}"
+                    )
                     Uri.fromFile(tempFile)
                 } else {
                     android.util.Log.e("MainViewModel", "Failed to decode bitmap from data URL")
@@ -768,6 +927,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sharpened = applyUnsharpMask(current, amount = 0.35f)
         if (sharpened != current) current.recycle()
         return sharpened
+    }
+
+    /**
+     * Upscale an edited (restored) bitmap back to the original source resolution for export
+     * (save/share/slideshow) if the initial prepare() downscaled it. Uses ESRGAN first, then
+     * legacy multi-step sharpen fallback. Returns the same bitmap if no action needed.
+     */
+    private suspend fun upscaleForExportIfNeeded(context: Context, src: Bitmap): Bitmap {
+        val meta = basePreparedMeta ?: return src
+        if (meta.downscale >= 0.999f) return src // no original downscale
+        // If already at original size, nothing to do
+        if (src.width == meta.originalW && src.height == meta.originalH) return src
+        // If at drawn size (downscaled) or some other size smaller than original, upscale
+        return try {
+            // Try ESRGAN first
+            android.util.Log.d("ImagePipeline","phase=export_upscale_esrgan opts=artifactDenoise=false")
+            val esr = EsganUpscaler.upscaleToMatch(
+                context = context,
+                src = src,
+                targetW = meta.originalW,
+                targetH = meta.originalH,
+                options = EsganOptions(enableArtifactDenoise = false)
+            )
+            if (esr.width == meta.originalW && esr.height == meta.originalH) {
+                android.util.Log.d(
+                    "ImagePipeline",
+                    "phase=export_upscale_esrgan success=${esr.width}x${esr.height}"
+                )
+                esr
+            } else {
+                // Fallback legacy sharpen path
+                val legacy = upscaleMultiStepSharpen(src, meta.originalW, meta.originalH)
+                android.util.Log.d(
+                    "ImagePipeline",
+                    "phase=export_upscale_fallback out=${legacy.width}x${legacy.height}"
+                )
+                legacy
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("ImagePipeline", "phase=export_upscale_esrgan_fail reason=${e.message}")
+            try {
+                val legacy = upscaleMultiStepSharpen(src, meta.originalW, meta.originalH)
+                android.util.Log.d(
+                    "ImagePipeline",
+                    "phase=export_upscale_legacy out=${legacy.width}x${legacy.height}"
+                )
+                legacy
+            } catch (e2: Exception) {
+                android.util.Log.e("ImagePipeline", "phase=export_upscale_fail reason=${e2.message}")
+                src
+            }
+        }
     }
 
     private fun denoiseIfNoisy(src: Bitmap): Bitmap {
@@ -960,9 +1171,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
+                val exportBitmap = upscaleForExportIfNeeded(context, bitmap)
                 val shareFile = File(context.cacheDir, "shared_image_${System.currentTimeMillis()}.jpg")
                 FileOutputStream(shareFile).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    exportBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                 }
 
                 val shareUri = FileProvider.getUriForFile(
@@ -1153,7 +1365,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 for (i in 0 until slides) {
                     val bmp = loadBitmapForSlideshow(context, uris[i]) ?: continue
-                    val downscaled = downscaleIfNeeded(bmp, maxDim)
+                    // Upscale each frame source back to original resolution if needed (export requirement),
+                    // then apply slideshow-specific downscale cap.
+                    val upscaled = upscaleForExportIfNeeded(context, bmp)
+                    val downscaled = downscaleIfNeeded(upscaled, maxDim)
+                    if (upscaled != bmp && downscaled != upscaled) {
+                        // recycle intermediate if different objects
+                        upscaled.recycle()
+                    }
                     if (downscaled != bmp) bmp.recycle()
                     val slideBitmap = composeSlide(downscaled, prompts[i])
                     if (downscaled != bmp) downscaled.recycle()

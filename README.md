@@ -31,6 +31,8 @@ An Android application built with Kotlin and Jetpack Compose that allows users t
 - **Fullscreen View**: Tap to view images in fullscreen with gesture controls
 - **Save to Gallery**: Save transformed images directly to device gallery
 - **Share Images**: Share transformed images using Android's native share sheet
+- **On-Device Super-Resolution**: Real-ESRGAN (TensorFlow Lite) tiled 4× super-resolution with GPU/NNAPI delegates and artifact (swirl) suppression
+- **Artifact-Aware Enhancement**: Edge-preserving blend + low-gradient median cleanup to reduce common GAN swirl patterns
 
 ### ⚙️ Advanced Settings
 - **Image Processing Options**:
@@ -104,6 +106,11 @@ com.squareup.okhttp3:okhttp:4.12.0
 
 // Permissions handling
 com.google.accompanist:accompanist-permissions:0.32.0
+
+// On-device ML super-resolution
+org.tensorflow:tensorflow-lite:2.14.0
+org.tensorflow:tensorflow-lite-gpu:2.14.0
+org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0
 ```
 
 ## Project Structure
@@ -194,8 +201,9 @@ OPENAI_API_KEY=your-openai-api-key-here
 3. **Resize & Optimize**: Optional downsizing based on settings
 4. **API Upload**: Multipart form data with PNG preservation
 5. **Response Handling**: Base64 to data URL conversion
-6. **Display**: Coil-based image rendering with comparison view
-7. **Share Processing**: JPEG conversion and FileProvider-based sharing
+6. **Super-Resolution & Cleanup (Conditional)**: On-device tiled Real-ESRGAN 4× passes (multi-pass if needed) using GPU → NNAPI → CPU fallback. Swirl artifact suppression blends ESRGAN detail with guided smooth base + median filter in low-gradient zones. Falls back to legacy multi-step bicubic + sharpen if ESRGAN unavailable.
+7. **Display**: Coil-based image rendering with comparison view
+8. **Share Processing**: JPEG conversion and FileProvider-based sharing
 
 ### OpenAI Integration
 - **Model**: GPT-Image-1 for image editing capabilities
@@ -210,6 +218,10 @@ OPENAI_API_KEY=your-openai-api-key-here
 - **Screen Lock**: Prevents sleep during processing
 - **Memory Management**: Efficient bitmap handling and recycling
 - **Cached Prompts**: Fast loading of transformation options
+- **Tiled ESRGAN Inference**: Adaptive tile sizing with overlap feathering to avoid seams and reduce OOM risk
+- **Delegate Cascade**: Automatic GPU → NNAPI → CPU fallback with single interpreter lifetime
+- **Artifact Suppression**: Edge-masked blend + selective median filtering to mitigate swirl artifacts common to GAN SR models
+- **Fallback Path**: Legacy multi-step sharpen pipeline retained if model missing or delegate init fails
 
 ### Future Enhancements
 - [ ] Batch processing capabilities
@@ -220,6 +232,7 @@ OPENAI_API_KEY=your-openai-api-key-here
 - [ ] Enhanced sharing options
 - [ ] User profiles and favorites
 - [ ] Community features
+- [ ] User-facing toggle & strength control for ESRGAN artifact suppression
 
 ## Build & Run
 
