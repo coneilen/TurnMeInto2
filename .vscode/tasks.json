@@ -8,6 +8,9 @@
 			"args": [
 				"assembleDebug"
 			],
+			"options": {
+				"cwd": "${workspaceFolder}/Android"
+			},
 			"group": "build",
 			"problemMatcher": [],
 			"isBackground": false
